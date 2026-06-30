@@ -1,0 +1,13 @@
+{
+  "name": "Auto AP Test Scheduler",
+  "dockerComposeFile": "../docker-compose.yml",
+  "service": "web",
+  "workspaceFolder": "/var/www/html",
+  "forwardPorts": [80, 3306],
+  "postStartCommand": "apache2ctl start",
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-azuretools.vscode-docker"]
+    }
+  }
+}

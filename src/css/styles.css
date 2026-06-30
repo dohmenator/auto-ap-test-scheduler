@@ -1,0 +1,131 @@
+/* ================================================
+   Auto AP Test Scheduler - Styles
+   Viera High School
+   ================================================ */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background-color: #f4f4f4;
+  color: #333;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ------------------------------------------------
+   Header
+------------------------------------------------ */
+header {
+  background-color: #1a5c1a;
+  color: white;
+  padding: 1.5rem 2rem;
+  border-bottom: 4px solid #FFD700;
+}
+
+.header-inner {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.header-title h1 {
+  font-size: 1.8rem;
+  font-weight: 700;
+  color: #FFD700;
+}
+
+.header-title p {
+  font-size: 0.95rem;
+  color: #cce5cc;
+  margin-top: 0.25rem;
+}
+
+/* ------------------------------------------------
+   Main Dashboard
+------------------------------------------------ */
+main {
+  flex: 1;
+  padding: 2rem;
+}
+
+.dashboard {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.section-label {
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #1a5c1a;
+  border-bottom: 2px solid #FFD700;
+  padding-bottom: 0.4rem;
+  margin: 2rem 0 1rem 0;
+}
+
+/* ------------------------------------------------
+   Cards
+------------------------------------------------ */
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1.25rem;
+}
+
+.card {
+  background: white;
+  border-radius: 8px;
+  padding: 1.5rem;
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  text-decoration: none;
+  color: #333;
+  border: 1px solid #ddd;
+  border-left: 4px solid #1a5c1a;
+  transition: all 0.2s ease;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+
+.card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+  border-left-color: #FFD700;
+}
+
+.card-icon {
+  font-size: 2rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.card-content h2 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #1a5c1a;
+  margin-bottom: 0.4rem;
+}
+
+.card-content p {
+  font-size: 0.875rem;
+  color: #666;
+  line-height: 1.5;
+}
+
+/* ------------------------------------------------
+   Footer
+------------------------------------------------ */
+footer {
+  background-color: #1a5c1a;
+  color: #cce5cc;
+  text-align: center;
+  padding: 1rem;
+  font-size: 0.8rem;
+  border-top: 4px solid #FFD700;
+}
