@@ -129,6 +129,26 @@ CREATE TABLE IF NOT EXISTS proctor_assignments (
 );
 
 -- ------------------------------------------------
+-- Test Room Overrides Table
+-- Stores coordinator's preferred room assignments
+-- per test per session date/time
+-- Persists year to year
+-- Checked before auto-assignment during scheduling
+-- ------------------------------------------------
+CREATE TABLE IF NOT EXISTS test_room_overrides (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    test_name VARCHAR(100) NOT NULL,
+    session_date DATE NOT NULL,
+    session_time ENUM('8AM', '12PM') NOT NULL,
+    main_location VARCHAR(100) NOT NULL,
+    accommodations_location VARCHAR(100),
+    overflow_location VARCHAR(100),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY unique_test_session (test_name, session_date, session_time)
+);
+
+-- ------------------------------------------------
 -- Pre-load AP Tests with room assignments
 -- Based on Viera High School seating chart document
 -- test_date and school_year updated each year

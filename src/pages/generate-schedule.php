@@ -36,6 +36,61 @@ function getTestingDates($period_start, $period_end)
 }
 
 // ------------------------------------------------
+// Helper: Resolve actual room for a test session
+// Checks overrides first, then auto-assigns
+// based on priority order if conflict exists
+// ------------------------------------------------
+function resolveSessionRoom(
+  $test_name,
+  $test_date,
+  $test_time,
+  $default_location,
+  $used_locations,
+  $conn
+) {
+
+  // Check for coordinator override first
+  $test_name_escaped = $conn->real_escape_string($test_name);
+  $test_date_escaped = $conn->real_escape_string($test_date);
+  $test_time_escaped = $conn->real_escape_string($test_time);
+
+  $override = $conn->query("
+        SELECT main_location FROM test_room_overrides
+        WHERE test_name = '$test_name_escaped'
+        AND session_date = '$test_date_escaped'
+        AND session_time = '$test_time_escaped'
+        LIMIT 1
+    ")->fetch_assoc();
+
+  if ($override) {
+    return $override['main_location'];
+  }
+
+  // No override — use default if not already taken
+  if (!in_array($default_location, $used_locations)) {
+    return $default_location;
+  }
+
+  // Default is taken — use priority list
+  $priority_rooms = [
+    'Media Center',
+    '4-116',
+    '2-108E',
+    '2-108G',
+    'Gym with Curtain'
+  ];
+
+  foreach ($priority_rooms as $room) {
+    if (!in_array($room, $used_locations)) {
+      return $room;
+    }
+  }
+
+  // Fallback — should never happen with enough rooms
+  return $default_location . ' (overflow)';
+}
+
+// ------------------------------------------------
 // Handle POST actions
 // ------------------------------------------------
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
@@ -105,6 +160,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
       }
 
       // ----------------------------------------
+      // Track rooms used per date+time slot
+      // ----------------------------------------
+      $slot_rooms_used = []; // ['2027-05-07_12PM' => ['Gym', 'Media Center']]
+
+      // ----------------------------------------
       // PASS 1: Fill first 4 days with
       // last 4 days teachers ONLY
       // ----------------------------------------
@@ -113,11 +173,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $test_date = $test['test_date'];
         $test_time = $test['test_time'];
 
-        // Only process first 4 days in pass 1
         if (!in_array($test_date, $first_4_days)) continue;
+
+        $slot_key = $test_date . '_' . $test_time;
+        if (!isset($slot_rooms_used[$slot_key])) {
+          $slot_rooms_used[$slot_key] = [];
+        }
+
+        // Resolve actual room for this session
+        $resolved_room = resolveSessionRoom(
+          $test_name,
+          $test_date,
+          $test_time,
+          $test['main_location'],
+          $slot_rooms_used[$slot_key],
+          $conn
+        );
+
+        // Track this room as used for this slot
+        $slot_rooms_used[$slot_key][] = $resolved_room;
 
         $student_count = $student_counts[$test_name] ?? 0;
         $proctors_needed = $student_count > 100 ? 2 : 1;
+        // $proctors_needed = 2; // Temporarily set to 2 for testing purposes, adjust as needed
         $assigned_count = 0;
 
         $eligible_teachers = [];
@@ -126,23 +204,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
           $teacher_name = $teacher['teacher_name'];
           $is_last_4_days = $teacher['is_last_3_days'];
 
-          // Pass 1: ONLY last 4 days teachers
           if (!$is_last_4_days) continue;
-
-          // Rule 1: Cannot proctor own subject
           if ($teacher['test_name'] === $test_name) continue;
-
-          // Rule 4: One assignment per teacher per day
           if (in_array($test_date, $teacher_assigned_dates[$teacher_name])) continue;
 
-          // Last 4 days teachers can proctor first 4 days
           $eligible_teachers[] = [
             'teacher' => $teacher,
             'assignment_count' => $teacher_assignment_counts[$teacher_name]
           ];
         }
 
-        // Sort by assignment count (fewest first)
         usort($eligible_teachers, function ($a, $b) {
           return $a['assignment_count'] - $b['assignment_count'];
         });
@@ -156,6 +227,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
           $teacher_name_escaped = $conn->real_escape_string($teacher_name);
           $test_name_escaped = $conn->real_escape_string($test_name);
           $test_date_escaped = $conn->real_escape_string($test_date);
+          $resolved_room_escaped = $conn->real_escape_string($resolved_room);
           $day_number = $test['testing_day_number'];
 
           $sql = "INSERT INTO proctor_assignments 
@@ -164,14 +236,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             VALUES 
             ('$teacher_name_escaped', '$test_name_escaped', 
              '$test_date_escaped', '$day_number',
-             '{$test['main_location']}', '$school_year')";
+             '$resolved_room_escaped', '$school_year')";
 
           if ($conn->query($sql)) {
             $assignments[] = [
               'teacher_name' => $teacher_name,
               'test_name' => $test_name,
               'test_date' => $test_date,
-              'test_time' => $test_time
+              'test_time' => $test_time,
+              'location' => $resolved_room
             ];
             $teacher_assignment_counts[$teacher_name]++;
             $teacher_assigned_dates[$teacher_name][] = $test_date;
@@ -189,6 +262,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
           ];
         }
       }
+      //end passs 1
 
       // ----------------------------------------
       // PASS 2: Fill ALL remaining sessions
@@ -200,13 +274,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $test_time = $test['test_time'];
         $student_count = $student_counts[$test_name] ?? 0;
         $proctors_needed = $student_count > 100 ? 2 : 1;
+        // $proctors_needed = 2; // Temporarily set to 2 for testing purposes, adjust as needed
 
-        // Check how many already assigned in pass 1
-        $already_assigned = count(array_filter($assignments, function ($a) use ($test_name, $test_date) {
-          return $a['test_name'] === $test_name && $a['test_date'] === $test_date;
-        }));
+        $already_assigned = count(array_filter(
+          $assignments,
+          function ($a) use ($test_name, $test_date) {
+            return $a['test_name'] === $test_name &&
+              $a['test_date'] === $test_date;
+          }
+        ));
 
         if ($already_assigned >= $proctors_needed) continue;
+
+        $slot_key = $test_date . '_' . $test_time;
+        if (!isset($slot_rooms_used[$slot_key])) {
+          $slot_rooms_used[$slot_key] = [];
+        }
+
+        // Resolve room — only if not already resolved in Pass 1
+        $already_resolved = false;
+        $resolved_room = ''; // initialize to prevent undefined variable
+        foreach ($assignments as $a) {
+          if ($a['test_name'] === $test_name && $a['test_date'] === $test_date) {
+            $resolved_room = $a['location'];
+            $already_resolved = true;
+            break;
+          }
+        }
+
+        if (!$already_resolved) {
+          $resolved_room = resolveSessionRoom(
+            $test_name,
+            $test_date,
+            $test_time,
+            $test['main_location'],
+            $slot_rooms_used[$slot_key],
+            $conn
+          );
+          $slot_rooms_used[$slot_key][] = $resolved_room;
+        }
 
         $assigned_count = $already_assigned;
         $eligible_teachers = [];
@@ -216,21 +322,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
           $their_test_date = $teacher['their_test_date'];
           $is_last_4_days = $teacher['is_last_3_days'];
 
-          // Rule 1: Cannot proctor own subject
           if ($teacher['test_name'] === $test_name) continue;
-
-          // Rule 4: One assignment per teacher per day
           if (in_array($test_date, $teacher_assigned_dates[$teacher_name])) continue;
 
           $eligible = false;
 
           if ($is_last_4_days) {
-            // Last 4 days teachers can only proctor first 4 days
             if (in_array($test_date, $first_4_days)) {
               $eligible = true;
             }
           } else {
             // All others proctor after their own test date
+            // Also exclude same day entirely regardless of time
             if ($test_date > $their_test_date) {
               $eligible = true;
             }
@@ -244,7 +347,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
           ];
         }
 
-        // Sort by assignment count (fewest first)
         usort($eligible_teachers, function ($a, $b) {
           return $a['assignment_count'] - $b['assignment_count'];
         });
@@ -258,6 +360,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
           $teacher_name_escaped = $conn->real_escape_string($teacher_name);
           $test_name_escaped = $conn->real_escape_string($test_name);
           $test_date_escaped = $conn->real_escape_string($test_date);
+          $resolved_room_escaped = $conn->real_escape_string($resolved_room);
           $day_number = $test['testing_day_number'];
 
           $sql = "INSERT INTO proctor_assignments 
@@ -266,14 +369,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             VALUES 
             ('$teacher_name_escaped', '$test_name_escaped', 
              '$test_date_escaped', '$day_number',
-             '{$test['main_location']}', '$school_year')";
+             '$resolved_room_escaped', '$school_year')";
 
           if ($conn->query($sql)) {
             $assignments[] = [
               'teacher_name' => $teacher_name,
               'test_name' => $test_name,
               'test_date' => $test_date,
-              'test_time' => $test_time
+              'test_time' => $test_time,
+              'location' => $resolved_room
             ];
             $teacher_assignment_counts[$teacher_name]++;
             $teacher_assigned_dates[$teacher_name][] = $test_date;
@@ -281,11 +385,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
           }
         }
 
-        // Update unassigned sessions list
-        $session_key = $test_name . '_' . $test_date;
-        $existing_unassigned = array_filter($unassigned_sessions, function ($s) use ($test_name, $test_date) {
-          return $s['test_name'] === $test_name && $s['test_date'] === $test_date;
-        });
+        $existing_unassigned = array_filter(
+          $unassigned_sessions,
+          function ($s) use ($test_name, $test_date) {
+            return $s['test_name'] === $test_name &&
+              $s['test_date'] === $test_date;
+          }
+        );
 
         if ($assigned_count < $proctors_needed && empty($existing_unassigned)) {
           $unassigned_sessions[] = [
@@ -297,12 +403,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
           ];
         }
       }
+      //end pass 2
 
       // ----------------------------------------
-      // PASS 3: Assign remaining unassigned
-      // last-4-days teachers to any session
-      // that still needs a proctor, before
-      // their own test date
+      // PASS 3: Last resort for unassigned
+      // last-4-days teachers
       // ----------------------------------------
       foreach ($teachers as $teacher) {
         $teacher_name = $teacher['teacher_name'];
@@ -318,12 +423,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
           $test_time = $test['test_time'];
           $student_count = $student_counts[$test_name] ?? 0;
           $proctors_needed = $student_count > 100 ? 2 : 1;
+          // $proctors_needed = 2; // Temporarily set to 2 for testing purposes, adjust as needed
 
           if ($teacher['test_name'] === $test_name) continue;
           if ($test_date >= $their_test_date) continue;
           if (in_array($test_date, $teacher_assigned_dates[$teacher_name])) continue;
 
-          // CRITICAL: Check this session isn't already fully staffed
+          // Check if session needs more proctors
           $session_assigned = count(array_filter(
             $assignments,
             function ($a) use ($test_name, $test_date) {
@@ -334,9 +440,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
           if ($session_assigned >= $proctors_needed) continue;
 
+          // Get resolved room for this session
+          $resolved_room = '';
+          foreach ($assignments as $a) {
+            if (
+              $a['test_name'] === $test_name &&
+              $a['test_date'] === $test_date
+            ) {
+              $resolved_room = $a['location'];
+              break;
+            }
+          }
+
+          if (empty($resolved_room)) {
+            $slot_key = $test_date . '_' . $test_time;
+            if (!isset($slot_rooms_used[$slot_key])) {
+              $slot_rooms_used[$slot_key] = [];
+            }
+            $resolved_room = resolveSessionRoom(
+              $test_name,
+              $test_date,
+              $test_time,
+              $test['main_location'],
+              $slot_rooms_used[$slot_key],
+              $conn
+            );
+            $slot_rooms_used[$slot_key][] = $resolved_room;
+          }
+
           $teacher_name_escaped = $conn->real_escape_string($teacher_name);
           $test_name_escaped = $conn->real_escape_string($test_name);
           $test_date_escaped = $conn->real_escape_string($test_date);
+          $resolved_room_escaped = $conn->real_escape_string($resolved_room);
           $day_number = $test['testing_day_number'];
 
           $sql = "INSERT INTO proctor_assignments 
@@ -345,14 +480,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             VALUES 
             ('$teacher_name_escaped', '$test_name_escaped', 
              '$test_date_escaped', '$day_number',
-             '{$test['main_location']}', '$school_year')";
+             '$resolved_room_escaped', '$school_year')";
 
           if ($conn->query($sql)) {
             $assignments[] = [
               'teacher_name' => $teacher_name,
               'test_name' => $test_name,
               'test_date' => $test_date,
-              'test_time' => $test_time
+              'test_time' => $test_time,
+              'location' => $resolved_room
             ];
             $teacher_assignment_counts[$teacher_name]++;
             $teacher_assigned_dates[$teacher_name][] = $test_date;
@@ -360,6 +496,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
           }
         }
       }
+      //end of pass 3
 
       // Flag teachers with zero assignments
       foreach ($teacher_assignment_counts as $teacher_name => $count) {
@@ -482,13 +619,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 // Fetch existing schedule for display
 // ------------------------------------------------
 $schedule_by_date = $conn->query("
-    SELECT p.test_date, p.test_name, p.testing_day_number, p.location,
-           GROUP_CONCAT(p.teacher_name ORDER BY p.teacher_name SEPARATOR ', ') 
-           as proctors
+    SELECT p.test_date, a.test_time, p.test_name, p.testing_day_number, p.location,
+           GROUP_CONCAT(p.teacher_name ORDER BY p.teacher_name SEPARATOR ', ') as proctors,
+           COUNT(p.id) as proctor_count,
+           (SELECT COUNT(*) FROM students s 
+            WHERE s.course_enrolled = p.test_name 
+            AND s.school_year = '$school_year') as student_count
     FROM proctor_assignments p
+    JOIN ap_tests a ON p.test_name = a.test_name
     WHERE p.school_year = '$school_year'
-    GROUP BY p.test_date, p.test_name, p.testing_day_number, p.location
-    ORDER BY p.test_date ASC, p.test_name ASC
+    GROUP BY p.test_date, a.test_time, p.test_name, p.testing_day_number, p.location
+    ORDER BY p.test_date ASC, 
+    CASE a.test_time WHEN '8AM' THEN 1 WHEN '12PM' THEN 2 END ASC,
+    p.test_name ASC
 ")->fetch_all(MYSQLI_ASSOC);
 
 $schedule_by_teacher = $conn->query("
@@ -734,7 +877,9 @@ $no_assignment_teachers = $conn->query("
               <tr>
                 <th>Date</th>
                 <th>Day #</th>
+                <th>Time</th>
                 <th>AP Test</th>
+                <th>Students</th>
                 <th>Proctor(s)</th>
                 <th>Location</th>
               </tr>
@@ -753,11 +898,30 @@ $no_assignment_teachers = $conn->query("
                       : ''; ?>
                   </td>
                   <td>Day <?php echo $row['testing_day_number']; ?></td>
+                  <td>
+                    <span class="badge <?php echo $row['test_time'] === '8AM'
+                                          ? 'badge-green' : 'badge-gold'; ?>">
+                      <?php echo $row['test_time']; ?>
+                    </span>
+                  </td>
                   <td><?php echo htmlspecialchars($row['test_name']); ?></td>
+                  <td>
+                    <?php if ($row['student_count'] > 0): ?>
+                      <span class="badge badge-green"><?php echo $row['student_count']; ?></span>
+                      <?php if ($row['student_count'] > 100): ?>
+                        <span class="badge badge-gold">2 needed</span>
+                      <?php endif; ?>
+                    <?php else: ?>
+                      <span class="badge badge-gray">No roster</span>
+                    <?php endif; ?>
+                  </td>
                   <td>
                     <span class="badge badge-green">
                       <?php echo htmlspecialchars($row['proctors']); ?>
                     </span>
+                    <?php if ($row['proctor_count'] > 1): ?>
+                      <span class="badge badge-gold"><?php echo $row['proctor_count']; ?> proctors</span>
+                    <?php endif; ?>
                   </td>
                   <td><?php echo htmlspecialchars($row['location']); ?></td>
                 </tr>
