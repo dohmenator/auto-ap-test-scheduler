@@ -167,6 +167,7 @@ VALUES
     ('AP Statistics', 'Gym', 'Gym with Curtain'),
     ('AP US History', 'Gym', '4-112'),
     ('AP Macroeconomics', 'Gym', '2-108G'),
+    ('AP Microeconomics', 'Gym', '2-108G'),
     ('AP Calculus AB', 'Gym', '2-108E'),
     ('AP Calculus BC', 'Gym', '2-108E'),
     ('AP Music Theory', '4-112', 'Guidance'),

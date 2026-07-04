@@ -11,88 +11,86 @@ if ($conn->connect_error) {
 
 $success_message = '';
 $error_message = '';
+$upload_message = '';
+$upload_status = '';
 
 // ------------------------------------------------
 // Handle Form Submissions
 // ------------------------------------------------
-// Bulk upload teachers from CSV
-if ($_POST['action'] === 'bulk_upload') {
-    if (isset($_FILES['teachers_csv']) && $_FILES['teachers_csv']['error'] === 0) {
-        $file = $_FILES['teachers_csv']['tmp_name'];
-        $handle = fopen($file, 'r');
-
-        $added = 0;
-        $skipped = 0;
-        $errors = [];
-        $row_number = 0;
-
-        while (($row = fgetcsv($handle)) !== false) {
-            $row_number++;
-
-            // Skip header row
-            if ($row_number === 1) {
-                continue;
-            }
-
-            // Skip empty rows
-            if (empty(array_filter($row))) {
-                continue;
-            }
-
-            $teacher_name = $conn->real_escape_string(trim($row[0] ?? ''));
-            $test_name = $conn->real_escape_string(trim($row[1] ?? ''));
-
-            if (empty($teacher_name) || empty($test_name)) {
-                $skipped++;
-                continue;
-            }
-
-            // Check if test exists in ap_tests
-            $test_check = $conn->query("SELECT id FROM ap_tests WHERE test_name = '$test_name'");
-            if ($test_check->num_rows === 0) {
-                $errors[] = "Row $row_number: Test '$test_name' not found in AP Tests.";
-                $skipped++;
-                continue;
-            }
-
-            // Check for duplicate
-            $dup_check = $conn->query("
-                SELECT id FROM ap_teachers 
-                WHERE teacher_name = '$teacher_name' 
-                AND test_name = '$test_name'
-            ");
-            if ($dup_check->num_rows > 0) {
-                $skipped++;
-                continue;
-            }
-
-            // Insert teacher
-            $sql = "INSERT INTO ap_teachers (teacher_name, test_name, active)
-                    VALUES ('$teacher_name', '$test_name', 1)";
-            if ($conn->query($sql)) {
-                $added++;
-            } else {
-                $errors[] = "Row $row_number: " . $conn->error;
-                $skipped++;
-            }
-        }
-
-        fclose($handle);
-
-        $upload_status = 'success';
-        $upload_message = "Upload complete: $added teacher(s) added, $skipped skipped.";
-        if (!empty($errors)) {
-            $upload_message .= "<br>Issues:<br>" . implode("<br>", $errors);
-            $upload_status = count($added) > 0 ? 'success' : 'error';
-        }
-
-    } else {
-        $upload_status = 'error';
-        $upload_message = "Please select a valid CSV file.";
-    }
-}
-
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+
+    // Bulk upload teachers from CSV
+    if ($_POST['action'] === 'bulk_upload') {
+        if (isset($_FILES['teachers_csv']) && $_FILES['teachers_csv']['error'] === 0) {
+            $file = $_FILES['teachers_csv']['tmp_name'];
+            $handle = fopen($file, 'r');
+
+            $added = 0;
+            $skipped = 0;
+            $errors = [];
+            $row_number = 0;
+
+            while (($row = fgetcsv($handle)) !== false) {
+                $row_number++;
+
+                // Skip header row
+                if ($row_number === 1) continue;
+
+                // Skip empty rows
+                if (empty(array_filter($row))) continue;
+
+                $teacher_name = $conn->real_escape_string(trim($row[0] ?? ''));
+                $test_name = $conn->real_escape_string(trim($row[1] ?? ''));
+
+                if (empty($teacher_name) || empty($test_name)) {
+                    $skipped++;
+                    continue;
+                }
+
+                // Check if test exists in ap_tests
+                $test_check = $conn->query("SELECT id FROM ap_tests WHERE test_name = '$test_name'");
+                if ($test_check->num_rows === 0) {
+                    $errors[] = "Row $row_number: Test '$test_name' not found in AP Tests.";
+                    $skipped++;
+                    continue;
+                }
+
+                // Check for duplicate
+                $dup_check = $conn->query("
+                    SELECT id FROM ap_teachers 
+                    WHERE teacher_name = '$teacher_name' 
+                    AND test_name = '$test_name'
+                ");
+                if ($dup_check->num_rows > 0) {
+                    $skipped++;
+                    continue;
+                }
+
+                // Insert teacher
+                $sql = "INSERT INTO ap_teachers (teacher_name, test_name, active)
+                        VALUES ('$teacher_name', '$test_name', 1)";
+                if ($conn->query($sql)) {
+                    $added++;
+                } else {
+                    $errors[] = "Row $row_number: " . $conn->error;
+                    $skipped++;
+                }
+            }
+
+            fclose($handle);
+
+            $upload_status = 'success';
+            $upload_message = "Upload complete: $added teacher(s) added, $skipped skipped.";
+            if (!empty($errors)) {
+                $upload_message .= "<br>Issues:<br>" . implode("<br>", $errors);
+                $upload_status = $added > 0 ? 'success' : 'error';
+            }
+
+        } else {
+            $upload_status = 'error';
+            $upload_message = "Please select a valid CSV file.";
+        }
+    }
 
     // Add new teacher
     if ($_POST['action'] === 'add_teacher') {
@@ -208,7 +206,7 @@ $tests = $tests_result->fetch_all(MYSQLI_ASSOC);
 
       <h2 class="page-title">👩‍🏫 Manage Teachers</h2>
       <p class="page-subtitle">
-        Add, edit, or deactivate AP teachers. Deactivated teachers are kept on record 
+        Add, edit, or deactivate AP teachers. Deactivated teachers are kept on record
         but excluded from proctor scheduling. A teacher can teach more than one AP course.
       </p>
 
@@ -220,40 +218,37 @@ $tests = $tests_result->fetch_all(MYSQLI_ASSOC);
       <?php endif; ?>
 
       <!-- ----------------------------------------
-     Bulk Upload Teachers
----------------------------------------- -->
-<div class="card-section">
-  <h3 class="section-title">Bulk Upload Teachers (CSV)</h3>
-  <p class="section-subtitle">
-    Upload a CSV file with the following columns: 
-    <strong>Teacher Name, Test Name</strong>. 
-    The first row should be the column headings. 
-    Existing teachers will not be duplicated.
-  </p>
+           Bulk Upload Teachers
+      ---------------------------------------- -->
+      <div class="card-section">
+        <h3 class="section-title">Bulk Upload Teachers (CSV)</h3>
+        <p class="section-subtitle">
+          Upload a CSV file with the following columns:
+          <strong>Teacher Name, Test Name</strong>.
+          The first row should be the column headings.
+          Existing teachers will not be duplicated.
+        </p>
 
-  <?php if (isset($upload_message)): ?>
-    <div class="alert alert-<?php echo $upload_status; ?>">
-      <?php echo $upload_message; ?>
-    </div>
-  <?php endif; ?>
+        <?php if ($upload_message): ?>
+          <div class="alert alert-<?php echo $upload_status; ?>">
+            <?php echo $upload_message; ?>
+          </div>
+        <?php endif; ?>
 
-  <form method="POST" enctype="multipart/form-data">
-    <input type="hidden" name="action" value="bulk_upload"/>
-    <div class="form-row">
-      <div class="form-group">
-        <label>Select CSV File</label>
-        <input type="file" name="teachers_csv" accept=".csv"/>
+        <form method="POST" enctype="multipart/form-data">
+          <input type="hidden" name="action" value="bulk_upload"/>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Select CSV File</label>
+              <input type="file" name="teachers_csv" accept=".csv"/>
+            </div>
+            <div class="form-group form-group-btn">
+              <button type="submit" class="btn btn-secondary">📤 Upload Teachers</button>
+            </div>
+          </div>
+        </form>
       </div>
-      <div class="form-group form-group-btn">
-        <button type="submit" class="btn btn-secondary">📤 Upload Teachers</button>
-      </div>
-    </div>
-  </form>
-</div>
 
-<div class="card-section">
-  <h3 class="section-title">Add New Teacher</h3>
-  
       <!-- ----------------------------------------
            Add New Teacher
       ---------------------------------------- -->
@@ -264,9 +259,9 @@ $tests = $tests_result->fetch_all(MYSQLI_ASSOC);
           <div class="form-row">
             <div class="form-group">
               <label>Teacher Name</label>
-              <input 
-                type="text" 
-                name="teacher_name" 
+              <input
+                type="text"
+                name="teacher_name"
                 placeholder="e.g. Jane Smith"
                 style="min-width: 220px"/>
             </div>
@@ -293,7 +288,7 @@ $tests = $tests_result->fetch_all(MYSQLI_ASSOC);
       ---------------------------------------- -->
       <div class="card-section">
         <h3 class="section-title">
-          Active Teachers 
+          Active Teachers
           <span class="badge badge-green"><?php echo count($active_teachers); ?></span>
         </h3>
 
@@ -321,30 +316,24 @@ $tests = $tests_result->fetch_all(MYSQLI_ASSOC);
                 </td>
                 <td>
                   <div class="action-btns">
-
-                    <!-- Edit Form (inline) -->
-                    <button 
+                    <button
                       class="btn btn-small btn-secondary"
                       onclick="toggleEdit(<?php echo $teacher['id']; ?>)">
                       ✏️ Edit
                     </button>
-
-                    <!-- Deactivate -->
                     <form method="POST" style="display:inline">
                       <input type="hidden" name="action" value="toggle_active"/>
                       <input type="hidden" name="teacher_id" value="<?php echo $teacher['id']; ?>"/>
                       <input type="hidden" name="current_active" value="1"/>
-                      <button 
-                        type="submit" 
+                      <button
+                        type="submit"
                         class="btn btn-small btn-danger"
                         onclick="return confirm('Deactivate <?php echo htmlspecialchars($teacher['teacher_name']); ?>?')">
                         Deactivate
                       </button>
                     </form>
-
                   </div>
 
-                  <!-- Edit Row (hidden by default) -->
                   <div id="edit-<?php echo $teacher['id']; ?>" class="edit-form" style="display:none">
                     <form method="POST">
                       <input type="hidden" name="action" value="update_teacher"/>
@@ -352,16 +341,16 @@ $tests = $tests_result->fetch_all(MYSQLI_ASSOC);
                       <div class="form-row" style="margin-top:0.75rem">
                         <div class="form-group">
                           <label>Teacher Name</label>
-                          <input 
-                            type="text" 
-                            name="teacher_name" 
+                          <input
+                            type="text"
+                            name="teacher_name"
                             value="<?php echo htmlspecialchars($teacher['teacher_name']); ?>"/>
                         </div>
                         <div class="form-group">
                           <label>AP Course</label>
                           <select name="test_name">
                             <?php foreach ($tests as $test): ?>
-                              <option 
+                              <option
                                 value="<?php echo htmlspecialchars($test['test_name']); ?>"
                                 <?php echo $test['test_name'] === $teacher['test_name'] ? 'selected' : ''; ?>>
                                 <?php echo htmlspecialchars($test['test_name']); ?>
@@ -375,7 +364,6 @@ $tests = $tests_result->fetch_all(MYSQLI_ASSOC);
                       </div>
                     </form>
                   </div>
-
                 </td>
               </tr>
               <?php endforeach; ?>
@@ -393,7 +381,9 @@ $tests = $tests_result->fetch_all(MYSQLI_ASSOC);
           Inactive Teachers
           <span class="badge badge-gray"><?php echo count($inactive_teachers); ?></span>
         </h3>
-        <p class="section-subtitle">These teachers are excluded from proctor scheduling but kept on record.</p>
+        <p class="section-subtitle">
+          These teachers are excluded from proctor scheduling but kept on record.
+        </p>
         <table class="data-table">
           <thead>
             <tr>
@@ -409,7 +399,6 @@ $tests = $tests_result->fetch_all(MYSQLI_ASSOC);
               <td><?php echo htmlspecialchars($teacher['test_name']); ?></td>
               <td>
                 <div class="action-btns">
-                  <!-- Reactivate -->
                   <form method="POST" style="display:inline">
                     <input type="hidden" name="action" value="toggle_active"/>
                     <input type="hidden" name="teacher_id" value="<?php echo $teacher['id']; ?>"/>
@@ -418,12 +407,11 @@ $tests = $tests_result->fetch_all(MYSQLI_ASSOC);
                       Reactivate
                     </button>
                   </form>
-                  <!-- Delete -->
                   <form method="POST" style="display:inline">
                     <input type="hidden" name="action" value="delete_teacher"/>
                     <input type="hidden" name="teacher_id" value="<?php echo $teacher['id']; ?>"/>
-                    <button 
-                      type="submit" 
+                    <button
+                      type="submit"
                       class="btn btn-small btn-danger"
                       onclick="return confirm('Permanently delete this teacher?')">
                       Delete
