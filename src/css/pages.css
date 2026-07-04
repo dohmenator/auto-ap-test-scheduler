@@ -345,3 +345,22 @@ tr.date-separator td {
   border-top: 2px solid #1a5c1a;
   padding-top: 0.75rem;
 }
+
+/* ------------------------------------------------
+   Unassigned row
+------------------------------------------------ */
+tr.unassigned-row td {
+  background-color: #fff0f0;
+}
+
+.badge-red {
+  background-color: #f8d7da;
+  color: #721c24;
+}
+
+/* ------------------------------------------------
+   Override form row
+------------------------------------------------ */
+tr.override-form-row td {
+  border-bottom: 2px solid #1a5c1a;
+}

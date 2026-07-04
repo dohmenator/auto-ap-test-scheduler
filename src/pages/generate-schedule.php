@@ -613,25 +613,121 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     $conn->query("DELETE FROM proctor_assignments WHERE school_year = '$school_year'");
     $success_message = "Schedule cleared successfully.";
   }
+
+
+  // ----------------------------------------
+  // Override / Assign Proctor
+  // ----------------------------------------
+  if ($_POST['action'] === 'override_proctor') {
+    $test_name = $conn->real_escape_string($_POST['test_name']);
+    $test_date = $conn->real_escape_string($_POST['test_date']);
+    $new_teacher = $conn->real_escape_string($_POST['new_teacher']);
+    $override_type = $_POST['override_type'] ?? 'replace';
+
+    // Get testing day number for this test
+    $day_result = $conn->query("
+        SELECT testing_day_number, main_location 
+        FROM ap_tests 
+        WHERE test_name = '$test_name' 
+        LIMIT 1
+    ")->fetch_assoc();
+
+    $day_number = $day_result['testing_day_number'] ?? null;
+    $location = $day_result['main_location'] ?? 'Gym';
+
+    // Get current location from existing assignment if exists
+    $current = $conn->query("
+        SELECT location FROM proctor_assignments
+        WHERE test_name = '$test_name'
+        AND test_date = '$test_date'
+        AND school_year = '$school_year'
+        LIMIT 1
+    ")->fetch_assoc();
+
+    if ($current) {
+      $location = $current['location'];
+    }
+
+    if ($override_type === 'replace') {
+      // Remove existing assignments for this test/date
+      $conn->query("
+            DELETE FROM proctor_assignments
+            WHERE test_name = '$test_name'
+            AND test_date = '$test_date'
+            AND school_year = '$school_year'
+        ");
+    }
+
+    // Insert new assignment
+    // Check for duplicate before inserting
+    $dup_check = $conn->query("
+    SELECT id FROM proctor_assignments
+    WHERE teacher_name = '$new_teacher'
+    AND test_name = '$test_name'
+    AND test_date = '$test_date'
+    AND school_year = '$school_year'
+    LIMIT 1
+");
+
+    if ($dup_check->num_rows > 0) {
+      $error_message = "This teacher is already assigned to this session.";
+    } else {
+      $location_escaped = $conn->real_escape_string($location);
+      $sql = "INSERT INTO proctor_assignments
+                (teacher_name, test_name, test_date, testing_day_number,
+                 location, school_year)
+            VALUES
+                ('$new_teacher', '$test_name', '$test_date', '$day_number',
+                 '$location_escaped', '$school_year')";
+
+      if ($conn->query($sql)) {
+        $success_message = "Proctor assignment updated successfully!";
+      } else {
+        $error_message = "Error updating assignment: " . $conn->error;
+      }
+    }
+  }
+
+  // ----------------------------------------
+  // Remove a specific proctor assignment
+  // ----------------------------------------
+  if ($_POST['action'] === 'remove_proctor') {
+    $assignment_id = (int)$_POST['assignment_id'];
+    if ($conn->query("DELETE FROM proctor_assignments WHERE id = $assignment_id")) {
+      $success_message = "Proctor removed successfully.";
+    } else {
+      $error_message = "Error removing proctor.";
+    }
+  }
 }
 
 // ------------------------------------------------
 // Fetch existing schedule for display
 // ------------------------------------------------
 $schedule_by_date = $conn->query("
-    SELECT p.test_date, a.test_time, p.test_name, p.testing_day_number, p.location,
-           GROUP_CONCAT(p.teacher_name ORDER BY p.teacher_name SEPARATOR ', ') as proctors,
-           COUNT(p.id) as proctor_count,
-           (SELECT COUNT(*) FROM students s 
-            WHERE s.course_enrolled = p.test_name 
-            AND s.school_year = '$school_year') as student_count
-    FROM proctor_assignments p
-    JOIN ap_tests a ON p.test_name = a.test_name
-    WHERE p.school_year = '$school_year'
-    GROUP BY p.test_date, a.test_time, p.test_name, p.testing_day_number, p.location
-    ORDER BY p.test_date ASC, 
+    SELECT 
+        a.test_date, 
+        a.test_time, 
+        a.test_name, 
+        a.testing_day_number, 
+        COALESCE(
+            GROUP_CONCAT(p.location ORDER BY p.teacher_name SEPARATOR ', '),
+            a.main_location
+        ) as location,
+        GROUP_CONCAT(p.teacher_name ORDER BY p.teacher_name SEPARATOR ', ') as proctors,
+        COUNT(p.id) as proctor_count,
+        (SELECT COUNT(*) FROM students s 
+         WHERE s.course_enrolled = a.test_name 
+         AND s.school_year = '$school_year') as student_count
+    FROM ap_tests a
+    LEFT JOIN proctor_assignments p ON a.test_name = p.test_name 
+        AND p.school_year = '$school_year'
+    WHERE a.test_date IS NOT NULL
+    AND a.test_time IS NOT NULL
+    GROUP BY a.test_date, a.test_time, a.test_name, a.testing_day_number, a.main_location
+    ORDER BY a.test_date ASC, 
     CASE a.test_time WHEN '8AM' THEN 1 WHEN '12PM' THEN 2 END ASC,
-    p.test_name ASC
+    a.test_name ASC
 ")->fetch_all(MYSQLI_ASSOC);
 
 $schedule_by_teacher = $conn->query("
@@ -680,6 +776,22 @@ $no_assignment_teachers = $conn->query("
     )
     ORDER BY t.teacher_name ASC
 ")->fetch_all(MYSQLI_ASSOC);
+
+// Fetch all active teachers for override dropdowns
+// Unassigned teachers first, then everyone else
+$all_teachers_result = $conn->query("
+    SELECT t.teacher_name, t.test_name,
+        CASE WHEN t.teacher_name NOT IN (
+            SELECT DISTINCT teacher_name 
+            FROM proctor_assignments 
+            WHERE school_year = '$school_year'
+        ) THEN 0 ELSE 1 END as is_assigned
+    FROM ap_teachers t
+    WHERE t.active = 1
+    ORDER BY is_assigned ASC, t.teacher_name ASC
+");
+$all_teachers = $all_teachers_result->fetch_all(MYSQLI_ASSOC);
+
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -882,6 +994,7 @@ $no_assignment_teachers = $conn->query("
                 <th>Students</th>
                 <th>Proctor(s)</th>
                 <th>Location</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
@@ -891,7 +1004,13 @@ $no_assignment_teachers = $conn->query("
                 $is_new_date = $row['test_date'] !== $current_date;
                 $current_date = $row['test_date'];
               ?>
-                <tr <?php echo $is_new_date ? 'class="date-separator"' : ''; ?>>
+                <?php
+                $override_id = 'override_' . md5($row['test_name'] . $row['test_date']);
+                $is_unassigned = empty($row['proctors']);
+                $row_class = $is_new_date ? 'date-separator' : '';
+                $row_class .= $is_unassigned ? ' unassigned-row' : '';
+                ?>
+                <tr class="<?php echo trim($row_class); ?>">
                   <td>
                     <?php echo $is_new_date
                       ? '<strong>' . date('M j, Y', strtotime($row['test_date'])) . '</strong>'
@@ -916,14 +1035,80 @@ $no_assignment_teachers = $conn->query("
                     <?php endif; ?>
                   </td>
                   <td>
-                    <span class="badge badge-green">
-                      <?php echo htmlspecialchars($row['proctors']); ?>
-                    </span>
-                    <?php if ($row['proctor_count'] > 1): ?>
-                      <span class="badge badge-gold"><?php echo $row['proctor_count']; ?> proctors</span>
+                    <?php if ($is_unassigned): ?>
+                      <span class="badge badge-red">❌ No proctor assigned</span>
+                    <?php else: ?>
+                      <span class="badge badge-green">
+                        <?php echo htmlspecialchars($row['proctors']); ?>
+                      </span>
+                      <?php if ($row['proctor_count'] > 1): ?>
+                        <span class="badge badge-gold"><?php echo $row['proctor_count']; ?> proctors</span>
+                      <?php endif; ?>
                     <?php endif; ?>
                   </td>
                   <td><?php echo htmlspecialchars($row['location']); ?></td>
+                  <td>
+                    <button
+                      class="btn btn-small <?php echo $is_unassigned ? 'btn-primary' : 'btn-secondary'; ?>"
+                      onclick="toggleOverride('<?php echo $override_id; ?>')">
+                      <?php echo $is_unassigned ? '+ Assign' : '✏️ Override'; ?>
+                    </button>
+                  </td>
+                </tr>
+
+                <!-- Override Form Row -->
+                <tr id="<?php echo $override_id; ?>" class="override-form-row" style="display:none">
+                  <td colspan="8" style="padding: 0.75rem 1rem; background: var(--bg-accent, #e8f0fe);">
+                    <form method="POST" style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap;">
+                      <input type="hidden" name="action" value="override_proctor" />
+                      <input type="hidden" name="test_name" value="<?php echo htmlspecialchars($row['test_name']); ?>" />
+                      <input type="hidden" name="test_date" value="<?php echo $row['test_date']; ?>" />
+
+                      <span style="font-size:0.85rem; font-weight:600; color:#1a5c1a;">
+                        <?php echo $is_unassigned ? 'Assign proctor:' : 'Override proctor:'; ?>
+                        <?php echo htmlspecialchars($row['test_name']); ?> —
+                        <?php echo date('M j', strtotime($row['test_date'])); ?>
+                        <?php echo $row['test_time']; ?>
+                      </span>
+
+                      <select name="new_teacher" required style="font-size:0.85rem; padding:0.35rem 0.5rem; border-radius:4px; border: 1px solid #ccc; min-width:220px;">
+                        <option value="">— Select proctor —</option>
+                        <optgroup label="Unassigned teachers (suggested)">
+                          <?php foreach ($all_teachers as $t): ?>
+                            <?php if ($t['is_assigned'] == 0): ?>
+                              <option value="<?php echo htmlspecialchars($t['teacher_name']); ?>">
+                                <?php echo htmlspecialchars($t['teacher_name']); ?>
+                                (teaches <?php echo htmlspecialchars($t['test_name']); ?>)
+                              </option>
+                            <?php endif; ?>
+                          <?php endforeach; ?>
+                        </optgroup>
+                        <optgroup label="All other teachers">
+                          <?php foreach ($all_teachers as $t): ?>
+                            <?php if ($t['is_assigned'] == 1): ?>
+                              <option value="<?php echo htmlspecialchars($t['teacher_name']); ?>">
+                                <?php echo htmlspecialchars($t['teacher_name']); ?>
+                                (teaches <?php echo htmlspecialchars($t['test_name']); ?>)
+                              </option>
+                            <?php endif; ?>
+                          <?php endforeach; ?>
+                        </optgroup>
+                      </select>
+
+                      <?php if (!$is_unassigned): ?>
+                        <select name="override_type" style="font-size:0.85rem; padding:0.35rem 0.5rem; border-radius:4px; border: 1px solid #ccc;">
+                          <option value="replace">Replace current proctor</option>
+                          <option value="add">Add as additional proctor</option>
+                        </select>
+                      <?php else: ?>
+                        <input type="hidden" name="override_type" value="add" />
+                      <?php endif; ?>
+
+                      <button type="submit" class="btn btn-small btn-primary">Save</button>
+                      <button type="button" class="btn btn-small btn-secondary"
+                        onclick="toggleOverride('<?php echo $override_id; ?>')">Cancel</button>
+                    </form>
+                  </td>
                 </tr>
               <?php endforeach; ?>
             </tbody>
@@ -969,6 +1154,29 @@ $no_assignment_teachers = $conn->query("
   <footer>
     <p>Viera High School &copy; <?php echo date('Y'); ?> — AP Testing Coordinator Portal</p>
   </footer>
+
+  <script>
+    function toggleOverride(id) {
+      const row = document.getElementById(id);
+      if (!row) return;
+      const isHidden = row.style.display === 'none' || row.style.display === '';
+
+      // Close all open override forms first
+      document.querySelectorAll('.override-form-row').forEach(r => {
+        r.style.display = 'none';
+      });
+
+      // Open this one if it was closed
+      if (isHidden) {
+        row.style.display = 'table-row';
+        // Scroll into view
+        row.scrollIntoView({
+          behavior: 'smooth',
+          block: 'nearest'
+        });
+      }
+    }
+  </script>
 
 </body>
 
