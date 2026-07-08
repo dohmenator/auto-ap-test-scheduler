@@ -498,6 +498,160 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
       }
       //end of pass 3
 
+      // ----------------------------------------
+      // PASS 4: Auto-assign proctors to
+      // accommodations rooms, Guidance,
+      // and overflow (Media Center)
+      // Priority: unassigned teachers first,
+      // then teachers with 2 assignments (flagged)
+      // ----------------------------------------
+
+      // Build list of sessions needing accommodations proctors
+      $acc_sessions = [];
+
+      foreach ($tests as $test) {
+        $test_name = $test['test_name'];
+        $test_date = $test['test_date'];
+        $acc_location = $test['accommodations_location'];
+        $overflow_location = $test['overflow_location'] ?? 'Media Center';
+
+        // Check if this test has students in accommodations room
+        $test_name_escaped = $conn->real_escape_string($test_name);
+
+        $acc_count = $conn->query("
+        SELECT COUNT(*) as cnt FROM students
+        WHERE course_enrolled = '$test_name_escaped'
+        AND school_year = '$school_year'
+        AND accommodation_type IN ('extended_50', 'other')
+    ")->fetch_assoc()['cnt'];
+
+        $guidance_count = $conn->query("
+        SELECT COUNT(*) as cnt FROM students
+        WHERE course_enrolled = '$test_name_escaped'
+        AND school_year = '$school_year'
+        AND accommodation_type = 'extended_100'
+    ")->fetch_assoc()['cnt'];
+
+        $main_count = $conn->query("
+        SELECT COUNT(*) as cnt FROM students
+        WHERE course_enrolled = '$test_name_escaped'
+        AND school_year = '$school_year'
+        AND accommodation_type IN ('none', 'preferential_only')
+    ")->fetch_assoc()['cnt'];
+
+        $overflow_count = max(0, $main_count - 175);
+
+        if ($acc_count > 0) {
+          $acc_sessions[] = [
+            'test_name' => $test_name,
+            'test_date' => $test_date,
+            'location' => $acc_location,
+            'student_count' => $acc_count,
+            'type' => 'accommodations'
+          ];
+        }
+
+        if ($guidance_count > 0) {
+          $acc_sessions[] = [
+            'test_name' => $test_name,
+            'test_date' => $test_date,
+            'location' => 'Guidance',
+            'student_count' => $guidance_count,
+            'type' => 'guidance'
+          ];
+        }
+
+        if ($overflow_count > 0) {
+          $acc_sessions[] = [
+            'test_name' => $test_name,
+            'test_date' => $test_date,
+            'location' => $overflow_location,
+            'student_count' => $overflow_count,
+            'type' => 'overflow'
+          ];
+        }
+      }
+
+      // Try to assign unassigned teachers first
+      foreach ($acc_sessions as $session) {
+        $test_name = $session['test_name'];
+        $test_date = $session['test_date'];
+        $location = $session['location'];
+
+        // Check if already has a proctor
+        $test_name_escaped = $conn->real_escape_string($test_name);
+        $location_escaped = $conn->real_escape_string($location);
+        $test_date_escaped = $conn->real_escape_string($test_date);
+
+        $existing = $conn->query("
+        SELECT id FROM proctor_assignments
+        WHERE test_name = '$test_name_escaped'
+        AND test_date = '$test_date_escaped'
+        AND location = '$location_escaped'
+        AND school_year = '$school_year'
+        LIMIT 1
+    ")->fetch_assoc();
+
+        if ($existing) continue;
+
+        // Find an unassigned teacher eligible for this slot
+        $assigned = false;
+        foreach ($teachers as $teacher) {
+          $teacher_name = $teacher['teacher_name'];
+          $their_test_date = $teacher['their_test_date'];
+          $is_last_4_days = $teacher['is_last_3_days'];
+
+          // Must have 0 assignments
+          if ($teacher_assignment_counts[$teacher_name] > 0) continue;
+
+          // Cannot proctor own subject
+          if ($teacher['test_name'] === $test_name) continue;
+
+          // Cannot be assigned same day
+          if (in_array($test_date, $teacher_assigned_dates[$teacher_name])) continue;
+
+          // Check timing eligibility
+          $eligible = false;
+          if ($is_last_4_days) {
+            if (in_array($test_date, $first_4_days)) {
+              $eligible = true;
+            }
+          } else {
+            if ($test_date > $their_test_date) {
+              $eligible = true;
+            }
+          }
+
+          if (!$eligible) continue;
+
+          // Assign this teacher
+          $teacher_name_escaped = $conn->real_escape_string($teacher_name);
+          $day_number = null;
+          foreach ($tests as $t) {
+            if ($t['test_name'] === $test_name) {
+              $day_number = $t['testing_day_number'];
+              break;
+            }
+          }
+
+          $sql = "INSERT INTO proctor_assignments
+            (teacher_name, test_name, test_date, testing_day_number,
+             location, school_year)
+            VALUES
+            ('$teacher_name_escaped', '$test_name_escaped',
+             '$test_date_escaped', '$day_number',
+             '$location_escaped', '$school_year')";
+
+          if ($conn->query($sql)) {
+            $teacher_assignment_counts[$teacher_name]++;
+            $teacher_assigned_dates[$teacher_name][] = $test_date;
+            $assigned = true;
+            break;
+          }
+        }
+      } //end pass 4
+
+
       // Flag teachers with zero assignments
       foreach ($teacher_assignment_counts as $teacher_name => $count) {
         if ($count === 0) {
@@ -635,8 +789,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     $day_number = $day_result['testing_day_number'] ?? null;
     $location = $day_result['main_location'] ?? 'Gym';
 
-    // Get current location from existing assignment if exists
-    $current = $conn->query("
+    // Use override_location if provided (for accommodations/guidance/overflow)
+    if (!empty($_POST['override_location'])) {
+      $location = $conn->real_escape_string($_POST['override_location']);
+    } else {
+      // Get current location from existing assignment
+      $current = $conn->query("
         SELECT location FROM proctor_assignments
         WHERE test_name = '$test_name'
         AND test_date = '$test_date'
@@ -644,8 +802,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         LIMIT 1
     ")->fetch_assoc();
 
-    if ($current) {
-      $location = $current['location'];
+      if ($current) {
+        $location = $current['location'];
+      }
     }
 
     if ($override_type === 'replace') {
@@ -701,6 +860,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
   }
 }
 
+
+//*******************  FETCH QUERIES *********************************/
 // ------------------------------------------------
 // Fetch existing schedule for display
 // ------------------------------------------------
@@ -709,26 +870,69 @@ $schedule_by_date = $conn->query("
         a.test_date, 
         a.test_time, 
         a.test_name, 
-        a.testing_day_number, 
+        a.testing_day_number,
+        a.main_location,
         COALESCE(
-            GROUP_CONCAT(p.location ORDER BY p.teacher_name SEPARATOR ', '),
+            (SELECT p2.location FROM proctor_assignments p2 
+             WHERE p2.test_name = a.test_name 
+             AND p2.school_year = '$school_year'
+             AND p2.location NOT IN ('Guidance', a.accommodations_location)
+             LIMIT 1),
             a.main_location
         ) as location,
-        GROUP_CONCAT(p.teacher_name ORDER BY p.teacher_name SEPARATOR ', ') as proctors,
-        COUNT(p.id) as proctor_count,
+        (SELECT GROUP_CONCAT(p2.teacher_name ORDER BY p2.teacher_name SEPARATOR ', ')
+         FROM proctor_assignments p2 
+         WHERE p2.test_name = a.test_name 
+         AND p2.school_year = '$school_year'
+         AND p2.location NOT IN ('Guidance', a.accommodations_location)
+        ) as proctors,
+        (SELECT COUNT(*) FROM proctor_assignments p2 
+         WHERE p2.test_name = a.test_name 
+         AND p2.school_year = '$school_year'
+         AND p2.location NOT IN ('Guidance', a.accommodations_location)
+        ) as proctor_count,
         (SELECT COUNT(*) FROM students s 
          WHERE s.course_enrolled = a.test_name 
          AND s.school_year = '$school_year') as student_count
     FROM ap_tests a
-    LEFT JOIN proctor_assignments p ON a.test_name = p.test_name 
-        AND p.school_year = '$school_year'
     WHERE a.test_date IS NOT NULL
     AND a.test_time IS NOT NULL
-    GROUP BY a.test_date, a.test_time, a.test_name, a.testing_day_number, a.main_location
     ORDER BY a.test_date ASC, 
     CASE a.test_time WHEN '8AM' THEN 1 WHEN '12PM' THEN 2 END ASC,
     a.test_name ASC
 ")->fetch_all(MYSQLI_ASSOC);
+
+//schedule by date query for testing purposes
+// $schedule_by_date_query = "
+//     SELECT 
+//         a.test_date, 
+//         a.test_time, 
+//         a.test_name, 
+//         a.testing_day_number,
+//         MIN(p.location) as location,
+//         GROUP_CONCAT(p.teacher_name ORDER BY p.teacher_name SEPARATOR ', ') as proctors,
+//         COUNT(p.id) as proctor_count,
+//         (SELECT COUNT(*) FROM students s 
+//          WHERE s.course_enrolled = a.test_name 
+//          AND s.school_year = '$school_year') as student_count
+//     FROM ap_tests a
+//     LEFT JOIN proctor_assignments p ON a.test_name = p.test_name 
+//         AND p.school_year = '$school_year'
+//         AND p.location = a.main_location
+//     WHERE a.test_date IS NOT NULL
+//     AND a.test_time IS NOT NULL
+//     GROUP BY a.test_date, a.test_time, a.test_name, a.testing_day_number, a.main_location
+//     ORDER BY a.test_date ASC, 
+//     CASE a.test_time WHEN '8AM' THEN 1 WHEN '12PM' THEN 2 END ASC,
+//     a.test_name ASC
+// ";
+
+// $schedule_by_date_result = $conn->query($schedule_by_date_query);
+// if (!$schedule_by_date_result) {
+//   die("Query error: " . $conn->error . "<br>Query: " . $schedule_by_date_query);
+// }
+// $schedule_by_date = $schedule_by_date_result->fetch_all(MYSQLI_ASSOC);
+//end schedule by date query for testing purposes
 
 $schedule_by_teacher = $conn->query("
     SELECT teacher_name,
@@ -791,6 +995,73 @@ $all_teachers_result = $conn->query("
     ORDER BY is_assigned ASC, t.teacher_name ASC
 ");
 $all_teachers = $all_teachers_result->fetch_all(MYSQLI_ASSOC);
+
+
+// ------------------------------------------------
+// Fetch accommodations/overflow/guidance sessions
+// with their proctor status
+// ------------------------------------------------
+$acc_proctor_sessions = $conn->query("
+    SELECT 
+        t.test_name,
+        t.test_date,
+        t.test_time,
+        t.accommodations_location,
+        t.overflow_location,
+        -- Accommodations room student count
+        (SELECT COUNT(*) FROM students s 
+         WHERE s.course_enrolled = t.test_name 
+         AND s.school_year = '$school_year'
+         AND s.accommodation_type IN ('extended_50','other')) as acc_count,
+        -- Guidance student count
+        (SELECT COUNT(*) FROM students s 
+         WHERE s.course_enrolled = t.test_name 
+         AND s.school_year = '$school_year'
+         AND s.accommodation_type = 'extended_100') as guidance_count,
+        -- Overflow student count
+        GREATEST(0, (SELECT COUNT(*) FROM students s 
+         WHERE s.course_enrolled = t.test_name 
+         AND s.school_year = '$school_year'
+         AND s.accommodation_type IN ('none','preferential_only')) - 175) as overflow_count,
+        -- Accommodations room proctor
+        (SELECT GROUP_CONCAT(p.teacher_name SEPARATOR ', ')
+         FROM proctor_assignments p
+         WHERE p.test_name = t.test_name
+         AND p.school_year = '$school_year'
+         AND p.location = t.accommodations_location
+         LIMIT 1) as acc_proctor,
+        -- Guidance proctor
+        (SELECT GROUP_CONCAT(p.teacher_name SEPARATOR ', ')
+         FROM proctor_assignments p
+         WHERE p.test_name = t.test_name
+         AND p.school_year = '$school_year'
+         AND p.location = 'Guidance'
+         LIMIT 1) as guidance_proctor,
+        -- Overflow proctor
+        (SELECT GROUP_CONCAT(p.teacher_name SEPARATOR ', ')
+         FROM proctor_assignments p
+         WHERE p.test_name = t.test_name
+         AND p.school_year = '$school_year'
+         AND p.location = t.overflow_location
+         LIMIT 1) as overflow_proctor
+    FROM ap_tests t
+    WHERE t.test_date IS NOT NULL
+    HAVING acc_count > 0 OR guidance_count > 0 OR overflow_count > 0
+    ORDER BY t.test_date ASC, t.test_name ASC
+")->fetch_all(MYSQLI_ASSOC);
+
+// Fetch teachers grouped for accommodations dropdown
+$acc_teachers_result = $conn->query("
+    SELECT t.teacher_name, t.test_name,
+        COUNT(p.id) as assignment_count
+    FROM ap_teachers t
+    LEFT JOIN proctor_assignments p ON t.teacher_name = p.teacher_name
+        AND p.school_year = '$school_year'
+    WHERE t.active = 1
+    GROUP BY t.teacher_name, t.test_name
+    ORDER BY assignment_count ASC, t.teacher_name ASC
+");
+$acc_teachers = $acc_teachers_result->fetch_all(MYSQLI_ASSOC);
 
 ?>
 <!DOCTYPE html>
@@ -1023,7 +1294,7 @@ $all_teachers = $all_teachers_result->fetch_all(MYSQLI_ASSOC);
                       <?php echo $row['test_time']; ?>
                     </span>
                   </td>
-                  <td><?php echo htmlspecialchars($row['test_name']); ?></td>
+                  <td><?php echo htmlspecialchars($row['test_name'] ?? ''); ?></td>
                   <td>
                     <?php if ($row['student_count'] > 0): ?>
                       <span class="badge badge-green"><?php echo $row['student_count']; ?></span>
@@ -1039,14 +1310,14 @@ $all_teachers = $all_teachers_result->fetch_all(MYSQLI_ASSOC);
                       <span class="badge badge-red">❌ No proctor assigned</span>
                     <?php else: ?>
                       <span class="badge badge-green">
-                        <?php echo htmlspecialchars($row['proctors']); ?>
+                        <?php echo htmlspecialchars($row['proctors'] ?? ''); ?>
                       </span>
                       <?php if ($row['proctor_count'] > 1): ?>
                         <span class="badge badge-gold"><?php echo $row['proctor_count']; ?> proctors</span>
                       <?php endif; ?>
                     <?php endif; ?>
                   </td>
-                  <td><?php echo htmlspecialchars($row['location']); ?></td>
+                  <td><?php echo htmlspecialchars($row['location'] ?? $row['main_location'] ?? '—'); ?></td>
                   <td>
                     <button
                       class="btn btn-small <?php echo $is_unassigned ? 'btn-primary' : 'btn-secondary'; ?>"
@@ -1061,12 +1332,12 @@ $all_teachers = $all_teachers_result->fetch_all(MYSQLI_ASSOC);
                   <td colspan="8" style="padding: 0.75rem 1rem; background: var(--bg-accent, #e8f0fe);">
                     <form method="POST" style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap;">
                       <input type="hidden" name="action" value="override_proctor" />
-                      <input type="hidden" name="test_name" value="<?php echo htmlspecialchars($row['test_name']); ?>" />
+                      <input type="hidden" name="test_name" value="<?php echo htmlspecialchars($row['test_name'] ?? ''); ?>" />
                       <input type="hidden" name="test_date" value="<?php echo $row['test_date']; ?>" />
 
                       <span style="font-size:0.85rem; font-weight:600; color:#1a5c1a;">
                         <?php echo $is_unassigned ? 'Assign proctor:' : 'Override proctor:'; ?>
-                        <?php echo htmlspecialchars($row['test_name']); ?> —
+                        <?php echo htmlspecialchars($row['test_name'] ?? ''); ?>
                         <?php echo date('M j', strtotime($row['test_date'])); ?>
                         <?php echo $row['test_time']; ?>
                       </span>
@@ -1132,9 +1403,9 @@ $all_teachers = $all_teachers_result->fetch_all(MYSQLI_ASSOC);
               <?php foreach ($schedule_by_teacher as $row): ?>
                 <tr>
                   <td>
-                    <strong><?php echo htmlspecialchars($row['teacher_name']); ?></strong>
+                    <strong><?php echo htmlspecialchars($row['teacher_name'] ?? ''); ?></strong>
                   </td>
-                  <td><?php echo htmlspecialchars($row['assignments']); ?></td>
+                  <td><?php echo htmlspecialchars($row['assignments'] ?? ''); ?></td>
                   <td>
                     <span class="badge <?php echo $row['total_assignments'] > 1
                                           ? 'badge-gold' : 'badge-green'; ?>">
@@ -1146,6 +1417,333 @@ $all_teachers = $all_teachers_result->fetch_all(MYSQLI_ASSOC);
             </tbody>
           </table>
         </div>
+
+        <!-- ----------------------------------------
+        Accommodations Room Proctors
+        ---------------------------------------- -->
+        <?php if (!empty($acc_proctor_sessions)): ?>
+          <div class="card-section">
+            <h3 class="section-title">
+              🏫 Accommodations, Guidance & Overflow Proctors
+            </h3>
+            <p class="section-subtitle">
+              These locations need proctor assignments. The app has attempted to
+              auto-assign available teachers. Use the Assign button to override
+              or fill any TBD slots. You can type any name in the field —
+              not restricted to the dropdown list.
+            </p>
+
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>AP Test</th>
+                  <th>Date</th>
+                  <th>Location</th>
+                  <th>Students</th>
+                  <th>Proctor</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                <?php foreach ($acc_proctor_sessions as $session): ?>
+
+                  <?php
+                  // Accommodations room row
+                  if ($session['acc_count'] > 0):
+                    $acc_override_id = 'acc_' . md5($session['test_name'] . '_acc');
+                  ?>
+                    <tr>
+                      <td><strong><?php echo htmlspecialchars($session['test_name']); ?></strong></td>
+                      <td><?php echo $session['test_date']
+                            ? date('M j, Y', strtotime($session['test_date'])) : '—'; ?></td>
+                      <td>
+                        <span class="badge badge-gray">
+                          <?php echo htmlspecialchars($session['accommodations_location']); ?>
+                        </span>
+                      </td>
+                      <td><span class="badge badge-green"><?php echo $session['acc_count']; ?></span></td>
+                      <td>
+                        <?php if ($session['acc_proctor']): ?>
+                          <span class="badge badge-green">
+                            <?php echo htmlspecialchars($session['acc_proctor']); ?>
+                          </span>
+                        <?php else: ?>
+                          <span class="badge badge-red">TBD</span>
+                        <?php endif; ?>
+                      </td>
+                      <td>
+                        <button class="btn btn-small btn-secondary"
+                          onclick="toggleOverride('<?php echo $acc_override_id; ?>')">
+                          <?php echo $session['acc_proctor'] ? '✏️ Override' : '+ Assign'; ?>
+                        </button>
+                      </td>
+                    </tr>
+                    <!-- Override form -->
+                    <tr id="<?php echo $acc_override_id; ?>" class="override-form-row" style="display:none">
+                      <td colspan="6" style="padding:0.75rem 1rem; background:#f0f7f0;">
+                        <form method="POST">
+                          <input type="hidden" name="action" value="override_proctor" />
+                          <input type="hidden" name="test_name"
+                            value="<?php echo htmlspecialchars($session['test_name']); ?>" />
+                          <input type="hidden" name="test_date"
+                            value="<?php echo $session['test_date']; ?>" />
+                          <input type="hidden" name="override_type" value="replace" />
+                          <input type="hidden" name="override_location"
+                            value="<?php echo htmlspecialchars($session['accommodations_location']); ?>" />
+                          <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap;">
+                            <span style="font-size:0.85rem; font-weight:600; color:#1a5c1a;">
+                              Assign proctor for <?php echo htmlspecialchars($session['accommodations_location']); ?>:
+                            </span>
+                            <div style="position:relative;">
+                              <input type="text"
+                                name="new_teacher"
+                                id="acc_input_<?php echo md5($session['test_name']); ?>"
+                                list="acc_teachers_list_<?php echo md5($session['test_name']); ?>"
+                                placeholder="Type or select a name..."
+                                style="min-width:250px; padding:0.35rem 0.5rem; border-radius:4px; border:1px solid #ccc; font-size:0.85rem;"
+                                value="<?php echo htmlspecialchars($session['acc_proctor'] ?? ''); ?>" />
+                              <datalist id="acc_teachers_list_<?php echo md5($session['test_name']); ?>">
+                                <option disabled>— Unassigned teachers —</option>
+                                <?php foreach ($acc_teachers as $t): ?>
+                                  <?php if ($t['assignment_count'] == 0): ?>
+                                    <option value="<?php echo htmlspecialchars($t['teacher_name']); ?>">
+                                      <?php echo htmlspecialchars($t['teacher_name']); ?>
+                                      (teaches <?php echo htmlspecialchars($t['test_name']); ?>) — 0 assignments
+                                    </option>
+                                  <?php endif; ?>
+                                <?php endforeach; ?>
+                                <option disabled>— Teachers with 2 assignments —</option>
+                                <?php foreach ($acc_teachers as $t): ?>
+                                  <?php if ($t['assignment_count'] == 2): ?>
+                                    <option value="<?php echo htmlspecialchars($t['teacher_name']); ?>">
+                                      <?php echo htmlspecialchars($t['teacher_name']); ?>
+                                      (teaches <?php echo htmlspecialchars($t['test_name']); ?>) — 2 assignments
+                                    </option>
+                                  <?php endif; ?>
+                                <?php endforeach; ?>
+                                <option disabled>— All other teachers —</option>
+                                <?php foreach ($acc_teachers as $t): ?>
+                                  <?php if ($t['assignment_count'] != 0 && $t['assignment_count'] != 2): ?>
+                                    <option value="<?php echo htmlspecialchars($t['teacher_name']); ?>">
+                                      <?php echo htmlspecialchars($t['teacher_name']); ?>
+                                      (teaches <?php echo htmlspecialchars($t['test_name']); ?>)
+                                    </option>
+                                  <?php endif; ?>
+                                <?php endforeach; ?>
+                              </datalist>
+                            </div>
+                            <small style="color:#666; font-style:italic;">
+                              You can type any name — not restricted to the list
+                            </small>
+                            <button type="submit" class="btn btn-small btn-primary">Save</button>
+                            <button type="button" class="btn btn-small btn-secondary"
+                              onclick="toggleOverride('<?php echo $acc_override_id; ?>')">
+                              Cancel
+                            </button>
+                          </div>
+                        </form>
+                      </td>
+                    </tr>
+                  <?php endif; ?>
+
+                  <?php
+                  // Guidance row
+                  if ($session['guidance_count'] > 0):
+                    $guid_override_id = 'guid_' . md5($session['test_name'] . '_guid');
+                  ?>
+                    <tr>
+                      <td><strong><?php echo htmlspecialchars($session['test_name']); ?></strong></td>
+                      <td><?php echo $session['test_date']
+                            ? date('M j, Y', strtotime($session['test_date'])) : '—'; ?></td>
+                      <td><span class="badge badge-gray">Guidance</span></td>
+                      <td><span class="badge badge-green"><?php echo $session['guidance_count']; ?></span></td>
+                      <td>
+                        <?php if ($session['guidance_proctor']): ?>
+                          <span class="badge badge-green">
+                            <?php echo htmlspecialchars($session['guidance_proctor']); ?>
+                          </span>
+                        <?php else: ?>
+                          <span class="badge badge-red">TBD</span>
+                        <?php endif; ?>
+                      </td>
+                      <td>
+                        <button class="btn btn-small btn-secondary"
+                          onclick="toggleOverride('<?php echo $guid_override_id; ?>')">
+                          <?php echo $session['guidance_proctor'] ? '✏️ Override' : '+ Assign'; ?>
+                        </button>
+                      </td>
+                    </tr>
+                    <!-- Override form -->
+                    <tr id="<?php echo $guid_override_id; ?>" class="override-form-row" style="display:none">
+                      <td colspan="6" style="padding:0.75rem 1rem; background:#f0f7f0;">
+                        <form method="POST">
+                          <input type="hidden" name="action" value="override_proctor" />
+                          <input type="hidden" name="test_name"
+                            value="<?php echo htmlspecialchars($session['test_name']); ?>" />
+                          <input type="hidden" name="test_date"
+                            value="<?php echo $session['test_date']; ?>" />
+                          <input type="hidden" name="override_type" value="replace" />
+                          <input type="hidden" name="override_location" value="Guidance" />
+                          <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap;">
+                            <span style="font-size:0.85rem; font-weight:600; color:#1a5c1a;">
+                              Assign proctor for Guidance:
+                            </span>
+                            <div style="position:relative;">
+                              <input type="text"
+                                name="new_teacher"
+                                list="guid_teachers_list_<?php echo md5($session['test_name']); ?>"
+                                placeholder="Type or select a name..."
+                                style="min-width:250px; padding:0.35rem 0.5rem; border-radius:4px; border:1px solid #ccc; font-size:0.85rem;"
+                                value="<?php echo htmlspecialchars($session['guidance_proctor'] ?? ''); ?>" />
+                              <datalist id="guid_teachers_list_<?php echo md5($session['test_name']); ?>">
+                                <option disabled>— Unassigned teachers —</option>
+                                <?php foreach ($acc_teachers as $t): ?>
+                                  <?php if ($t['assignment_count'] == 0): ?>
+                                    <option value="<?php echo htmlspecialchars($t['teacher_name']); ?>">
+                                      <?php echo htmlspecialchars($t['teacher_name']); ?>
+                                      (teaches <?php echo htmlspecialchars($t['test_name']); ?>) — 0 assignments
+                                    </option>
+                                  <?php endif; ?>
+                                <?php endforeach; ?>
+                                <option disabled>— Teachers with 2 assignments —</option>
+                                <?php foreach ($acc_teachers as $t): ?>
+                                  <?php if ($t['assignment_count'] == 2): ?>
+                                    <option value="<?php echo htmlspecialchars($t['teacher_name']); ?>">
+                                      <?php echo htmlspecialchars($t['teacher_name']); ?>
+                                      (teaches <?php echo htmlspecialchars($t['test_name']); ?>) — 2 assignments
+                                    </option>
+                                  <?php endif; ?>
+                                <?php endforeach; ?>
+                                <option disabled>— All other teachers —</option>
+                                <?php foreach ($acc_teachers as $t): ?>
+                                  <?php if ($t['assignment_count'] != 0 && $t['assignment_count'] != 2): ?>
+                                    <option value="<?php echo htmlspecialchars($t['teacher_name']); ?>">
+                                      <?php echo htmlspecialchars($t['teacher_name']); ?>
+                                      (teaches <?php echo htmlspecialchars($t['test_name']); ?>)
+                                    </option>
+                                  <?php endif; ?>
+                                <?php endforeach; ?>
+                              </datalist>
+                            </div>
+                            <small style="color:#666; font-style:italic;">
+                              You can type any name — not restricted to the list
+                            </small>
+                            <button type="submit" class="btn btn-small btn-primary">Save</button>
+                            <button type="button" class="btn btn-small btn-secondary"
+                              onclick="toggleOverride('<?php echo $guid_override_id; ?>')">
+                              Cancel
+                            </button>
+                          </div>
+                        </form>
+                      </td>
+                    </tr>
+                  <?php endif; ?>
+
+                  <?php
+                  // Overflow row
+                  if ($session['overflow_count'] > 0):
+                    $ovf_override_id = 'ovf_' . md5($session['test_name'] . '_ovf');
+                  ?>
+                    <tr>
+                      <td><strong><?php echo htmlspecialchars($session['test_name']); ?></strong></td>
+                      <td><?php echo $session['test_date']
+                            ? date('M j, Y', strtotime($session['test_date'])) : '—'; ?></td>
+                      <td>
+                        <span class="badge badge-gold">
+                          <?php echo htmlspecialchars($session['overflow_location'] ?? 'Media Center'); ?>
+                          (overflow)
+                        </span>
+                      </td>
+                      <td><span class="badge badge-green"><?php echo $session['overflow_count']; ?></span></td>
+                      <td>
+                        <?php if ($session['overflow_proctor']): ?>
+                          <span class="badge badge-green">
+                            <?php echo htmlspecialchars($session['overflow_proctor']); ?>
+                          </span>
+                        <?php else: ?>
+                          <span class="badge badge-red">TBD</span>
+                        <?php endif; ?>
+                      </td>
+                      <td>
+                        <button class="btn btn-small btn-secondary"
+                          onclick="toggleOverride('<?php echo $ovf_override_id; ?>')">
+                          <?php echo $session['overflow_proctor'] ? '✏️ Override' : '+ Assign'; ?>
+                        </button>
+                      </td>
+                    </tr>
+                    <!-- Override form -->
+                    <tr id="<?php echo $ovf_override_id; ?>" class="override-form-row" style="display:none">
+                      <td colspan="6" style="padding:0.75rem 1rem; background:#f0f7f0;">
+                        <form method="POST">
+                          <input type="hidden" name="action" value="override_proctor" />
+                          <input type="hidden" name="test_name"
+                            value="<?php echo htmlspecialchars($session['test_name']); ?>" />
+                          <input type="hidden" name="test_date"
+                            value="<?php echo $session['test_date']; ?>" />
+                          <input type="hidden" name="override_type" value="replace" />
+                          <input type="hidden" name="override_location"
+                            value="<?php echo htmlspecialchars($session['overflow_location'] ?? 'Media Center'); ?>" />
+                          <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap;">
+                            <span style="font-size:0.85rem; font-weight:600; color:#1a5c1a;">
+                              Assign proctor for
+                              <?php echo htmlspecialchars($session['overflow_location'] ?? 'Media Center'); ?>:
+                            </span>
+                            <div style="position:relative;">
+                              <input type="text"
+                                name="new_teacher"
+                                list="ovf_teachers_list_<?php echo md5($session['test_name']); ?>"
+                                placeholder="Type or select a name..."
+                                style="min-width:250px; padding:0.35rem 0.5rem; border-radius:4px; border:1px solid #ccc; font-size:0.85rem;"
+                                value="<?php echo htmlspecialchars($session['overflow_proctor'] ?? ''); ?>" />
+                              <datalist id="ovf_teachers_list_<?php echo md5($session['test_name']); ?>">
+                                <option disabled>— Unassigned teachers —</option>
+                                <?php foreach ($acc_teachers as $t): ?>
+                                  <?php if ($t['assignment_count'] == 0): ?>
+                                    <option value="<?php echo htmlspecialchars($t['teacher_name']); ?>">
+                                      <?php echo htmlspecialchars($t['teacher_name']); ?>
+                                      (teaches <?php echo htmlspecialchars($t['test_name']); ?>) — 0 assignments
+                                    </option>
+                                  <?php endif; ?>
+                                <?php endforeach; ?>
+                                <option disabled>— Teachers with 2 assignments —</option>
+                                <?php foreach ($acc_teachers as $t): ?>
+                                  <?php if ($t['assignment_count'] == 2): ?>
+                                    <option value="<?php echo htmlspecialchars($t['teacher_name']); ?>">
+                                      <?php echo htmlspecialchars($t['teacher_name']); ?>
+                                      (teaches <?php echo htmlspecialchars($t['test_name']); ?>) — 2 assignments
+                                    </option>
+                                  <?php endif; ?>
+                                <?php endforeach; ?>
+                                <option disabled>— All other teachers —</option>
+                                <?php foreach ($acc_teachers as $t): ?>
+                                  <?php if ($t['assignment_count'] != 0 && $t['assignment_count'] != 2): ?>
+                                    <option value="<?php echo htmlspecialchars($t['teacher_name']); ?>">
+                                      <?php echo htmlspecialchars($t['teacher_name']); ?>
+                                      (teaches <?php echo htmlspecialchars($t['test_name']); ?>)
+                                    </option>
+                                  <?php endif; ?>
+                                <?php endforeach; ?>
+                              </datalist>
+                            </div>
+                            <small style="color:#666; font-style:italic;">
+                              You can type any name — not restricted to the list
+                            </small>
+                            <button type="submit" class="btn btn-small btn-primary">Save</button>
+                            <button type="button" class="btn btn-small btn-secondary"
+                              onclick="toggleOverride('<?php echo $ovf_override_id; ?>')">
+                              Cancel
+                            </button>
+                          </div>
+                        </form>
+                      </td>
+                    </tr>
+                  <?php endif; ?>
+
+                <?php endforeach; ?>
+              </tbody>
+            </table>
+          </div>
+        <?php endif; ?>
       <?php endif; ?>
 
     </div>
