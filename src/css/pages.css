@@ -364,3 +364,16 @@ tr.unassigned-row td {
 tr.override-form-row td {
   border-bottom: 2px solid #1a5c1a;
 }
+
+/* ------------------------------------------------
+   Schedule grouping
+------------------------------------------------ */
+.data-table tr.group-first td {
+  border-top: 2px solid #1a5c1a;
+}
+
+.data-table tr.group-inner td {
+  border-top: 0;
+  padding-top: 0.4rem;
+  padding-bottom: 0.4rem;
+}
