@@ -6,7 +6,7 @@ $password = 'appassword';
 
 $conn = new mysqli($host, $user, $password, $dbname);
 if ($conn->connect_error) {
-    die("Connection failed: " . $conn->connect_error);
+  die("Connection failed: " . $conn->connect_error);
 }
 
 $success_message = '';
@@ -18,17 +18,17 @@ $school_year = date('Y') . '-' . (date('Y') + 1);
 // ------------------------------------------------
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
-    if ($_POST['action'] === 'generate_seating') {
+  if ($_POST['action'] === 'generate_seating') {
 
-        // Clear existing seating assignments for this year
-        $conn->query("
+    // Clear existing seating assignments for this year
+    $conn->query("
             UPDATE students 
             SET seat_number = NULL, assigned_location = NULL
             WHERE school_year = '$school_year'
         ");
 
-        // Fetch all AP tests that have students
-        $tests_result = $conn->query("
+    // Fetch all AP tests that have students
+    $tests_result = $conn->query("
             SELECT DISTINCT s.course_enrolled, 
                            t.main_location,
                            t.accommodations_location,
@@ -40,287 +40,311 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             WHERE s.school_year = '$school_year'
             ORDER BY t.test_date ASC, s.course_enrolled ASC
         ");
-        $tests = $tests_result->fetch_all(MYSQLI_ASSOC);
+    $tests = $tests_result->fetch_all(MYSQLI_ASSOC);
 
-        $charts_generated = 0;
+    $charts_generated = 0;
 
-        foreach ($tests as $test) {
-            $course = $conn->real_escape_string($test['course_enrolled']);
-            $main_location = $test['main_location'];
-            $acc_location = $test['accommodations_location'];
-            $overflow_location = $test['overflow_location'] ?? 'Media Center';
+    foreach ($tests as $test) {
+      $course = $conn->real_escape_string($test['course_enrolled']);
+      $main_location = $test['main_location'];
+      $acc_location = $test['accommodations_location'];
+      $overflow_location = $test['overflow_location'] ?? 'Media Center';
 
-            // ----------------------------------------
-            // Fetch proctor for each location
-            // ----------------------------------------
-            $proctor_result = $conn->query("
+      // ----------------------------------------
+      // Fetch proctor for each location
+      // ----------------------------------------
+      $proctor_result = $conn->query("
                 SELECT teacher_name, location
                 FROM proctor_assignments
                 WHERE test_name = '$course'
                 AND school_year = '$school_year'
                 ORDER BY id ASC
             ");
-            $proctors_by_location = [];
-            while ($p = $proctor_result->fetch_assoc()) {
-                $loc = $p['location'];
-                if (!isset($proctors_by_location[$loc])) {
-                    $proctors_by_location[$loc] = [];
-                }
-                $proctors_by_location[$loc][] = $p['teacher_name'];
-            }
+      $proctors_by_location = [];
+      while ($p = $proctor_result->fetch_assoc()) {
+        $loc = $p['location'];
+        if (!isset($proctors_by_location[$loc])) {
+          $proctors_by_location[$loc] = [];
+        }
+        $proctors_by_location[$loc][] = $p['teacher_name'];
+      }
 
-            // ----------------------------------------
-            // Fetch students grouped by accommodation type
-            // ----------------------------------------
+      // ----------------------------------------
+      // Fetch students grouped by accommodation type
+      // ----------------------------------------
 
-            // Group 1: Preferential seating only → Main location (seats first)
-            $pref_result = $conn->query("
+      // Group 1: Preferential seating only → Main location (seats first)
+      $pref_result = $conn->query("
                 SELECT * FROM students
                 WHERE course_enrolled = '$course'
                 AND school_year = '$school_year'
                 AND accommodation_type = 'preferential_only'
                 ORDER BY last_name ASC, first_name ASC
             ");
-            $pref_students = $pref_result->fetch_all(MYSQLI_ASSOC);
+      $pref_students = $pref_result->fetch_all(MYSQLI_ASSOC);
 
-            // Group 2: No accommodations → Main location
-            $none_result = $conn->query("
+      // Group 2: No accommodations → Main location
+      $none_result = $conn->query("
                 SELECT * FROM students
                 WHERE course_enrolled = '$course'
                 AND school_year = '$school_year'
                 AND accommodation_type = 'none'
                 ORDER BY last_name ASC, first_name ASC
             ");
-            $none_students = $none_result->fetch_all(MYSQLI_ASSOC);
+      $none_students = $none_result->fetch_all(MYSQLI_ASSOC);
 
-            // Group 3: 50% extended time + other → Accommodations room
-            $acc_result = $conn->query("
+      // Group 3: 50% extended time + other → Accommodations room
+      $acc_result = $conn->query("
                 SELECT * FROM students
                 WHERE course_enrolled = '$course'
                 AND school_year = '$school_year'
                 AND accommodation_type IN ('extended_50', 'other')
                 ORDER BY last_name ASC, first_name ASC
             ");
-            $acc_students = $acc_result->fetch_all(MYSQLI_ASSOC);
+      $acc_students = $acc_result->fetch_all(MYSQLI_ASSOC);
 
-            // Group 4: 100% double time → Guidance
-            $dbl_result = $conn->query("
+      // Group 4: 100% double time → Guidance
+      $dbl_result = $conn->query("
                 SELECT * FROM students
                 WHERE course_enrolled = '$course'
                 AND school_year = '$school_year'
                 AND accommodation_type = 'extended_100'
                 ORDER BY last_name ASC, first_name ASC
             ");
-            $dbl_students = $dbl_result->fetch_all(MYSQLI_ASSOC);
+      $dbl_students = $dbl_result->fetch_all(MYSQLI_ASSOC);
 
-            // ----------------------------------------
-            // Combine main location students
-            // Preferential first, then no accommodations
-            // ----------------------------------------
-            $main_students = array_merge($pref_students, $none_students);
-            $overflow_students = [];
+      // ----------------------------------------
+      // Combine main location students
+      // Preferential first, then no accommodations
+      // ----------------------------------------
+      $main_students = array_merge($pref_students, $none_students);
+      $overflow_students = [];
 
-            // Check if main location exceeds 175
-            $capacity = 175;
-            if (count($main_students) > $capacity) {
-                $overflow_students = array_slice($main_students, $capacity);
-                $main_students = array_slice($main_students, 0, $capacity);
-            }
+      // Check if main location exceeds 175
+      $capacity = 175;
+      if (count($main_students) > $capacity) {
+        $overflow_students = array_slice($main_students, $capacity);
+        $main_students = array_slice($main_students, 0, $capacity);
+      }
 
-            // ----------------------------------------
-            // Assign seat numbers
-            // ----------------------------------------
+      // ----------------------------------------
+      // Assign seat numbers
+      // ----------------------------------------
 
-            // Main location seats
-            $seat = 1;
-            foreach ($main_students as $student) {
-                $id = $student['id'];
-                $loc_escaped = $conn->real_escape_string($main_location);
-                $conn->query("
-                    UPDATE students 
-                    SET seat_number = $seat, assigned_location = '$loc_escaped'
-                    WHERE id = $id
-                ");
-                $seat++;
-            }
+      // Main location seats — random assignment
+      // Preferential seating students get first seats
+      $pref_ids = array_column($pref_students, 'id');
+      $none_ids = array_column($none_students, 'id');
 
-            // Overflow seats
-            $seat = 1;
-            foreach ($overflow_students as $student) {
-                $id = $student['id'];
-                $loc_escaped = $conn->real_escape_string($overflow_location);
-                $conn->query("
-                    UPDATE students 
-                    SET seat_number = $seat, assigned_location = '$loc_escaped'
-                    WHERE id = $id
-                ");
-                $seat++;
-            }
+      // Shuffle non-preferential students
+      shuffle($none_ids);
 
-            // Accommodations room seats
-            $seat = 1;
-            foreach ($acc_students as $student) {
-                $id = $student['id'];
-                $loc_escaped = $conn->real_escape_string($acc_location);
-                $conn->query("
-                    UPDATE students 
-                    SET seat_number = $seat, assigned_location = '$loc_escaped'
-                    WHERE id = $id
-                ");
-                $seat++;
-            }
+      // Assign seats: preferential first (1, 2, 3...) then random for rest
+      $seat = 1;
+      foreach ($pref_ids as $id) {
+        $loc_escaped = $conn->real_escape_string($main_location);
+        $conn->query("
+        UPDATE students 
+        SET seat_number = $seat, assigned_location = '$loc_escaped'
+        WHERE id = $id
+    ");
+        $seat++;
+      }
+      foreach ($none_ids as $id) {
+        $loc_escaped = $conn->real_escape_string($main_location);
+        $conn->query("
+        UPDATE students 
+        SET seat_number = $seat, assigned_location = '$loc_escaped'
+        WHERE id = $id
+    ");
+        $seat++;
+      }
 
-            // Guidance seats
-            $seat = 1;
-            foreach ($dbl_students as $student) {
-                $id = $student['id'];
-                $conn->query("
-                    UPDATE students 
-                    SET seat_number = $seat, assigned_location = 'Guidance'
-                    WHERE id = $id
-                ");
-                $seat++;
-            }
+      // Overflow seats — random
+      $overflow_ids = array_column($overflow_students, 'id');
+      shuffle($overflow_ids);
+      $seat = 1;
+      foreach ($overflow_ids as $id) {
+        $loc_escaped = $conn->real_escape_string($overflow_location);
+        $conn->query("
+        UPDATE students 
+        SET seat_number = $seat, assigned_location = '$loc_escaped'
+        WHERE id = $id
+    ");
+        $seat++;
+      }
 
-            $charts_generated++;
-        }
+      // Accommodations room seats — random
+      $acc_ids = array_column($acc_students, 'id');
+      shuffle($acc_ids);
+      $seat = 1;
+      foreach ($acc_ids as $id) {
+        $loc_escaped = $conn->real_escape_string($acc_location);
+        $conn->query("
+        UPDATE students 
+        SET seat_number = $seat, assigned_location = '$loc_escaped'
+        WHERE id = $id
+    ");
+        $seat++;
+      }
 
-        $success_message = "Seating charts generated for $charts_generated AP test(s)!";
+      // Guidance seats — random
+      $dbl_ids = array_column($dbl_students, 'id');
+      shuffle($dbl_ids);
+      $seat = 1;
+      foreach ($dbl_ids as $id) {
+        $conn->query("
+        UPDATE students 
+        SET seat_number = $seat, assigned_location = 'Guidance'
+        WHERE id = $id
+    ");
+        $seat++;
+      }
     }
 
-    // ----------------------------------------
-    // Download seating chart for a specific test
-    // ----------------------------------------
-    if ($_POST['action'] === 'download_seating') {
-        $test_name = $conn->real_escape_string($_POST['test_name']);
+    $success_message = "Seating charts generated for $charts_generated AP test(s)!";
+  }
 
-        // Fetch test info
-        $test_info = $conn->query("
+  // ----------------------------------------
+  // Download seating chart for a specific test
+  // ----------------------------------------
+  if ($_POST['action'] === 'download_seating') {
+    $test_name = $conn->real_escape_string($_POST['test_name']);
+
+    // Fetch test info
+    $test_info = $conn->query("
             SELECT * FROM ap_tests 
             WHERE test_name = '$test_name' 
             LIMIT 1
         ")->fetch_assoc();
 
-        if (!$test_info) {
-            $error_message = "Test not found.";
-        } else {
-            $main_location = $test_info['main_location'];
-            $acc_location = $test_info['accommodations_location'];
-            $overflow_location = $test_info['overflow_location'] ?? 'Media Center';
+    if (!$test_info) {
+      $error_message = "Test not found.";
+    } else {
+      $main_location = $test_info['main_location'];
+      $acc_location = $test_info['accommodations_location'];
+      $overflow_location = $test_info['overflow_location'] ?? 'Media Center';
 
-            // Fetch proctors per location
-            $proctor_result = $conn->query("
+      // Fetch proctors per location
+      $proctor_result = $conn->query("
                 SELECT teacher_name, location
                 FROM proctor_assignments
                 WHERE test_name = '$test_name'
                 AND school_year = '$school_year'
                 ORDER BY id ASC
             ");
-            $proctors_by_location = [];
-            while ($p = $proctor_result->fetch_assoc()) {
-                $loc = $p['location'];
-                if (!isset($proctors_by_location[$loc])) {
-                    $proctors_by_location[$loc] = [];
-                }
-                $proctors_by_location[$loc][] = $p['teacher_name'];
-            }
+      $proctors_by_location = [];
+      while ($p = $proctor_result->fetch_assoc()) {
+        $loc = $p['location'];
+        if (!isset($proctors_by_location[$loc])) {
+          $proctors_by_location[$loc] = [];
+        }
+        $proctors_by_location[$loc][] = $p['teacher_name'];
+      }
 
-            // Helper to get proctor name for a location
-            $getProctor = function($location) use ($proctors_by_location) {
-                if (isset($proctors_by_location[$location]) && 
-                    !empty($proctors_by_location[$location])) {
-                    return implode(' / ', $proctors_by_location[$location]);
-                }
-                return 'TBD';
-            };
+      // Helper to get proctor name for a location
+      $getProctor = function ($location) use ($proctors_by_location) {
+        if (
+          isset($proctors_by_location[$location]) &&
+          !empty($proctors_by_location[$location])
+        ) {
+          return implode(' / ', $proctors_by_location[$location]);
+        }
+        return 'TBD';
+      };
 
-            // Fetch students by location ordered by seat number
-            $fetchStudents = function($location) use ($conn, $test_name, $school_year) {
-                $loc_escaped = $conn->real_escape_string($location);
-                $tn_escaped = $conn->real_escape_string($test_name);
-                return $conn->query("
+      // Fetch students by location ordered by seat number
+      $fetchStudents = function ($location) use ($conn, $test_name, $school_year) {
+        $loc_escaped = $conn->real_escape_string($location);
+        $tn_escaped = $conn->real_escape_string($test_name);
+        return $conn->query("
                     SELECT * FROM students
                     WHERE course_enrolled = '$tn_escaped'
                     AND school_year = '$school_year'
                     AND assigned_location = '$loc_escaped'
-                    ORDER BY seat_number ASC, last_name ASC
+                    ORDER BY seat_number ASC
                 ")->fetch_all(MYSQLI_ASSOC);
-            };
+      };
 
-            $main_students = $fetchStudents($main_location);
-            $overflow_students = $fetchStudents($overflow_location);
-            $acc_students = $fetchStudents($acc_location);
-            $guidance_students = $fetchStudents('Guidance');
+      $main_students = $fetchStudents($main_location);
+      $overflow_students = $fetchStudents($overflow_location);
+      $acc_students = $fetchStudents($acc_location);
+      $guidance_students = $fetchStudents('Guidance');
 
-            // Build safe filename
-            $safe_name = str_replace([' ', '/'], '_', $test_name);
-            $filename = $safe_name . '_seating_chart_' . $school_year . '.csv';
+      // Build safe filename
+      $safe_name = str_replace([' ', '/'], '_', $test_name);
+      $filename = $safe_name . '_seating_chart_' . $school_year . '.csv';
 
-            header('Content-Type: text/csv');
-            header('Content-Disposition: attachment; filename="' . $filename . '"');
+      header('Content-Type: text/csv');
+      header('Content-Disposition: attachment; filename="' . $filename . '"');
 
-            $output = fopen('php://output', 'w');
+      $output = fopen('php://output', 'w');
 
-            // ----------------------------------------
-            // Write each section
-            // ----------------------------------------
-            $sections = [];
+      // ----------------------------------------
+      // Write each section
+      // ----------------------------------------
+      $sections = [];
 
-            if (!empty($main_students)) {
-                $sections[] = [
-                    'header' => $test_name . ' - ' . $getProctor($main_location),
-                    'location' => $main_location,
-                    'students' => $main_students
-                ];
-            }
+      if (!empty($main_students)) {
+        $sections[] = [
+          'header' => $test_name . ' - ' . $getProctor($main_location),
+          'location' => $main_location,
+          'students' => $main_students
+        ];
+      }
 
-            if (!empty($overflow_students)) {
-                $sections[] = [
-                    'header' => $test_name . ' - ' . $getProctor($overflow_location),
-                    'location' => $overflow_location,
-                    'students' => $overflow_students
-                ];
-            }
+      if (!empty($overflow_students)) {
+        $sections[] = [
+          'header' => $test_name . ' - ' . $getProctor($overflow_location),
+          'location' => $overflow_location,
+          'students' => $overflow_students
+        ];
+      }
 
-            if (!empty($acc_students)) {
-                $sections[] = [
-                    'header' => $test_name . ' - ' . $getProctor($acc_location),
-                    'location' => $acc_location,
-                    'students' => $acc_students
-                ];
-            }
+      if (!empty($acc_students)) {
+        $sections[] = [
+          'header' => $test_name . ' - ' . $getProctor($acc_location),
+          'location' => $acc_location,
+          'students' => $acc_students
+        ];
+      }
 
-            if (!empty($guidance_students)) {
-                $sections[] = [
-                    'header' => $test_name . ' - ' . $getProctor('Guidance'),
-                    'location' => 'Guidance',
-                    'students' => $guidance_students
-                ];
-            }
+      if (!empty($guidance_students)) {
+        $sections[] = [
+          'header' => $test_name . ' - ' . $getProctor('Guidance'),
+          'location' => 'Guidance',
+          'students' => $guidance_students
+        ];
+      }
 
-            foreach ($sections as $section) {
-                // Section header
-                fputcsv($output, [$section['header'], '', '', '', '']);
-                fputcsv($output, ['Seating #', 'First Name', 'Last Name', 
-                                  'Location', 'Accommodations']);
+      foreach ($sections as $section) {
+        // Section header
+        fputcsv($output, [$section['header'], '', '', '', '']);
+        fputcsv($output, [
+          'Seating #',
+          'First Name',
+          'Last Name',
+          'Location',
+          'Accommodations'
+        ]);
 
-                foreach ($section['students'] as $student) {
-                    fputcsv($output, [
-                        $student['seat_number'] ?? '',
-                        $student['first_name'],
-                        $student['last_name'],
-                        $section['location'],
-                        $student['accommodations'] ?? ''
-                    ]);
-                }
+        foreach ($section['students'] as $student) {
+          fputcsv($output, [
+            $student['seat_number'] ?? '',
+            $student['first_name'],
+            $student['last_name'],
+            $section['location'],
+            $student['accommodations'] ?? ''
+          ]);
+        }
 
-                // Blank row between sections
-                fputcsv($output, ['', '', '', '', '']);
-                fputcsv($output, ['', '', '', '', '']);
-            }
+        // Blank row between sections
+        fputcsv($output, ['', '', '', '', '']);
+        fputcsv($output, ['', '', '', '', '']);
+      }
 
-            // Late testers (no seat number, class_section_type = late)
-            $late_result = $conn->query("
+      // Late testers (no seat number, class_section_type = late)
+      $late_result = $conn->query("
                 SELECT * FROM students
                 WHERE course_enrolled = '$test_name'
                 AND school_year = '$school_year'
@@ -328,26 +352,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                      OR class_section_type LIKE '%Late%')
                 ORDER BY last_name ASC
             ");
-            $late_students = $late_result->fetch_all(MYSQLI_ASSOC);
+      $late_students = $late_result->fetch_all(MYSQLI_ASSOC);
 
-            if (!empty($late_students)) {
-                fputcsv($output, ['Late Testers', '', '', '', '']);
-                fputcsv($output, ['', 'First Name', 'Last Name', '', 'Accommodations']);
-                foreach ($late_students as $student) {
-                    fputcsv($output, [
-                        'Late Tester',
-                        $student['first_name'],
-                        $student['last_name'],
-                        '',
-                        $student['accommodations'] ?? ''
-                    ]);
-                }
-            }
-
-            fclose($output);
-            exit;
+      if (!empty($late_students)) {
+        fputcsv($output, ['Late Testers', '', '', '', '']);
+        fputcsv($output, ['', 'First Name', 'Last Name', '', 'Accommodations']);
+        foreach ($late_students as $student) {
+          fputcsv($output, [
+            'Late Tester',
+            $student['first_name'],
+            $student['last_name'],
+            '',
+            $student['accommodations'] ?? ''
+          ]);
         }
+      }
+
+      fclose($output);
+      exit;
     }
+  }
 }
 
 // ------------------------------------------------
@@ -374,18 +398,20 @@ $tests_summary = $conn->query("
     ORDER BY t.test_date ASC, s.course_enrolled ASC
 ")->fetch_all(MYSQLI_ASSOC);
 
-$charts_ready = !empty($tests_summary) && 
-    count(array_filter($tests_summary, fn($t) => $t['max_seat'] > 0)) > 0;
+$charts_ready = !empty($tests_summary) &&
+  count(array_filter($tests_summary, fn($t) => $t['max_seat'] > 0)) > 0;
 ?>
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-  <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Generate Seating Charts | Auto AP Test Scheduler</title>
-  <link rel="stylesheet" href="../css/styles.css"/>
-  <link rel="stylesheet" href="../css/pages.css"/>
+  <link rel="stylesheet" href="../css/styles.css" />
+  <link rel="stylesheet" href="../css/pages.css" />
 </head>
+
 <body>
 
   <header>
@@ -403,8 +429,8 @@ $charts_ready = !empty($tests_summary) &&
 
       <h2 class="page-title">💺 Generate Seating Charts</h2>
       <p class="page-subtitle">
-        Generate seating charts for each AP test. Students are automatically 
-        sorted into their testing locations based on accommodations. 
+        Generate seating charts for each AP test. Students are automatically
+        sorted into their testing locations based on accommodations.
         Preferential seating students are assigned first seats.
       </p>
 
@@ -422,7 +448,7 @@ $charts_ready = !empty($tests_summary) &&
         <h3 class="section-title">Controls</h3>
         <div class="action-btns">
           <form method="POST" style="display:inline">
-            <input type="hidden" name="action" value="generate_seating"/>
+            <input type="hidden" name="action" value="generate_seating" />
             <button type="submit" class="btn btn-primary"
               onclick="return confirm('This will regenerate all seating charts. Continue?')">
               💺 Generate All Seating Charts
@@ -430,7 +456,7 @@ $charts_ready = !empty($tests_summary) &&
           </form>
         </div>
         <p class="section-subtitle" style="margin-top:0.75rem;">
-          Run this after uploading all student rosters and generating the 
+          Run this after uploading all student rosters and generating the
           proctor schedule. Each AP test gets its own downloadable CSV.
         </p>
       </div>
@@ -439,82 +465,82 @@ $charts_ready = !empty($tests_summary) &&
            Tests Summary Table
       ---------------------------------------- -->
       <?php if (!empty($tests_summary)): ?>
-      <div class="card-section">
-        <h3 class="section-title">
-          AP Tests with Student Rosters
-          <span class="badge badge-green"><?php echo count($tests_summary); ?> tests</span>
-        </h3>
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>AP Test</th>
-              <th>Date</th>
-              <th>Time</th>
-              <th>Total Students</th>
-              <th>Main Location</th>
-              <th>No Acc.</th>
-              <th>Preferential</th>
-              <th>Acc. Room</th>
-              <th>Guidance</th>
-              <th>Overflow?</th>
-              <th>Download</th>
-            </tr>
-          </thead>
-          <tbody>
-            <?php foreach ($tests_summary as $test): ?>
-            <?php 
-              $total_main = $test['no_acc'] + $test['pref'];
-              $needs_overflow = $total_main > 175;
-            ?>
-            <tr>
-              <td><strong><?php echo htmlspecialchars($test['course_enrolled']); ?></strong></td>
-              <td>
-                <?php echo $test['test_date'] 
-                  ? date('M j, Y', strtotime($test['test_date'])) 
-                  : '<span class="badge badge-gray">Not set</span>'; ?>
-              </td>
-              <td>
-                <?php if ($test['test_time']): ?>
-                  <span class="badge <?php echo $test['test_time'] === '8AM' 
-                    ? 'badge-green' : 'badge-gold'; ?>">
-                    <?php echo $test['test_time']; ?>
-                  </span>
-                <?php endif; ?>
-              </td>
-              <td>
-                <span class="badge badge-green"><?php echo $test['total_students']; ?></span>
-              </td>
-              <td><?php echo htmlspecialchars($test['main_location']); ?></td>
-              <td><?php echo $test['no_acc']; ?></td>
-              <td><?php echo $test['pref']; ?></td>
-              <td><?php echo $test['acc']; ?></td>
-              <td><?php echo $test['guidance']; ?></td>
-              <td>
-                <?php if ($needs_overflow): ?>
-                  <span class="badge badge-gold">⚠️ Yes (<?php echo $total_main - 175; ?> overflow)</span>
-                <?php else: ?>
-                  <span class="badge badge-gray">No</span>
-                <?php endif; ?>
-              </td>
-              <td>
-                <?php if ($test['max_seat'] > 0): ?>
-                  <form method="POST" style="display:inline">
-                    <input type="hidden" name="action" value="download_seating"/>
-                    <input type="hidden" name="test_name" 
-                           value="<?php echo htmlspecialchars($test['course_enrolled']); ?>"/>
-                    <button type="submit" class="btn btn-small btn-secondary">
-                      ⬇️ CSV
-                    </button>
-                  </form>
-                <?php else: ?>
-                  <span class="badge badge-gray">Not generated</span>
-                <?php endif; ?>
-              </td>
-            </tr>
-            <?php endforeach; ?>
-          </tbody>
-        </table>
-      </div>
+        <div class="card-section">
+          <h3 class="section-title">
+            AP Tests with Student Rosters
+            <span class="badge badge-green"><?php echo count($tests_summary); ?> tests</span>
+          </h3>
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>AP Test</th>
+                <th>Date</th>
+                <th>Time</th>
+                <th>Total Students</th>
+                <th>Main Location</th>
+                <th>No Acc.</th>
+                <th>Preferential</th>
+                <th>Acc. Room</th>
+                <th>Guidance</th>
+                <th>Overflow?</th>
+                <th>Download</th>
+              </tr>
+            </thead>
+            <tbody>
+              <?php foreach ($tests_summary as $test): ?>
+                <?php
+                $total_main = $test['no_acc'] + $test['pref'];
+                $needs_overflow = $total_main > 175;
+                ?>
+                <tr>
+                  <td><strong><?php echo htmlspecialchars($test['course_enrolled']); ?></strong></td>
+                  <td>
+                    <?php echo $test['test_date']
+                      ? date('M j, Y', strtotime($test['test_date']))
+                      : '<span class="badge badge-gray">Not set</span>'; ?>
+                  </td>
+                  <td>
+                    <?php if ($test['test_time']): ?>
+                      <span class="badge <?php echo $test['test_time'] === '8AM'
+                                            ? 'badge-green' : 'badge-gold'; ?>">
+                        <?php echo $test['test_time']; ?>
+                      </span>
+                    <?php endif; ?>
+                  </td>
+                  <td>
+                    <span class="badge badge-green"><?php echo $test['total_students']; ?></span>
+                  </td>
+                  <td><?php echo htmlspecialchars($test['main_location']); ?></td>
+                  <td><?php echo $test['no_acc']; ?></td>
+                  <td><?php echo $test['pref']; ?></td>
+                  <td><?php echo $test['acc']; ?></td>
+                  <td><?php echo $test['guidance']; ?></td>
+                  <td>
+                    <?php if ($needs_overflow): ?>
+                      <span class="badge badge-gold">⚠️ Yes (<?php echo $total_main - 175; ?> overflow)</span>
+                    <?php else: ?>
+                      <span class="badge badge-gray">No</span>
+                    <?php endif; ?>
+                  </td>
+                  <td>
+                    <?php if ($test['max_seat'] > 0): ?>
+                      <form method="POST" style="display:inline">
+                        <input type="hidden" name="action" value="download_seating" />
+                        <input type="hidden" name="test_name"
+                          value="<?php echo htmlspecialchars($test['course_enrolled']); ?>" />
+                        <button type="submit" class="btn btn-small btn-secondary">
+                          ⬇️ CSV
+                        </button>
+                      </form>
+                    <?php else: ?>
+                      <span class="badge badge-gray">Not generated</span>
+                    <?php endif; ?>
+                  </td>
+                </tr>
+              <?php endforeach; ?>
+            </tbody>
+          </table>
+        </div>
       <?php endif; ?>
 
     </div>
@@ -525,5 +551,6 @@ $charts_ready = !empty($tests_summary) &&
   </footer>
 
 </body>
+
 </html>
 <?php $conn->close(); ?>
