@@ -185,6 +185,7 @@ $locations = $locations_result->fetch_all(MYSQLI_ASSOC);
           </p>
           <div class="action-btns">
             <form method="POST" style="display:inline">
+              <?php echo csrf_input(); ?>
               <input type="hidden" name="action" value="delete_test" />
               <input type="hidden" name="test_id" value="<?php echo $delete_warning['test_id']; ?>" />
               <input type="hidden" name="test_name" value="<?php echo h($delete_warning['test_name']); ?>" />
@@ -355,6 +356,7 @@ $locations = $locations_result->fetch_all(MYSQLI_ASSOC);
             method="POST"
             id="delete-form-<?php echo $test['id']; ?>"
             style="display:none">
+            <?php echo csrf_input(); ?>
             <input type="hidden" name="action" value="delete_test" />
             <input type="hidden" name="test_id" value="<?php echo $test['id']; ?>" />
             <input type="hidden" name="test_name"
