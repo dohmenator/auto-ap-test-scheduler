@@ -1,8 +1,7 @@
 <?php
-$host = 'db';
-$dbname = 'ap_scheduler';
-$user = 'apuser';
-$password = 'appassword';
+require_once __DIR__ . '/../db.php';
+
+$school_year = get_school_year();
 
 $conn = new mysqli($host, $user, $password, $dbname);
 if ($conn->connect_error) {
@@ -493,7 +492,7 @@ $charts_ready = !empty($tests_summary) &&
                 $needs_overflow = $total_main > 175;
                 ?>
                 <tr>
-                  <td><strong><?php echo htmlspecialchars($test['course_enrolled']); ?></strong></td>
+                  <td><strong><?php echo h($test['course_enrolled']); ?></strong></td>
                   <td>
                     <?php echo $test['test_date']
                       ? date('M j, Y', strtotime($test['test_date']))
@@ -510,7 +509,7 @@ $charts_ready = !empty($tests_summary) &&
                   <td>
                     <span class="badge badge-green"><?php echo $test['total_students']; ?></span>
                   </td>
-                  <td><?php echo htmlspecialchars($test['main_location']); ?></td>
+                  <td><?php echo h($test['main_location']); ?></td>
                   <td><?php echo $test['no_acc']; ?></td>
                   <td><?php echo $test['pref']; ?></td>
                   <td><?php echo $test['acc']; ?></td>
@@ -527,7 +526,7 @@ $charts_ready = !empty($tests_summary) &&
                       <form method="POST" style="display:inline">
                         <input type="hidden" name="action" value="download_seating" />
                         <input type="hidden" name="test_name"
-                          value="<?php echo htmlspecialchars($test['course_enrolled']); ?>" />
+                          value="<?php echo h($test['course_enrolled']); ?>" />
                         <button type="submit" class="btn btn-small btn-secondary">
                           ⬇️ CSV
                         </button>

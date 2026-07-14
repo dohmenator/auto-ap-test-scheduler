@@ -1,15 +1,7 @@
 <?php
-$host = 'db';
-$dbname = 'ap_scheduler';
-$user = 'apuser';
-$password = 'appassword';
+require_once __DIR__ . '/../db.php';
 
-$conn = new mysqli($host, $user, $password, $dbname);
-if ($conn->connect_error) {
-    die("Connection failed: " . $conn->connect_error);
-}
-
-$school_year = date('Y') . '-' . (date('Y') + 1);
+$school_year = get_school_year();
 
 // ------------------------------------------------
 // Handle Downloads
@@ -527,7 +519,7 @@ $schedule_by_teacher = $conn->query("
                             <?php foreach ($seating_summary as $test): ?>
                                 <tr>
                                     <td>
-                                        <strong><?php echo htmlspecialchars($test['course_enrolled']); ?></strong>
+                                        <strong><?php echo h($test['course_enrolled']); ?></strong>
                                     </td>
                                     <td>
                                         <?php echo $test['test_date']
@@ -554,7 +546,7 @@ $schedule_by_teacher = $conn->query("
                                         <form method="POST" style="display:inline">
                                             <input type="hidden" name="action" value="download_seating" />
                                             <input type="hidden" name="test_name"
-                                                value="<?php echo htmlspecialchars($test['course_enrolled']); ?>" />
+                                                value="<?php echo h($test['course_enrolled']); ?>" />
                                             <button type="submit" class="btn btn-small btn-secondary">
                                                 ⬇️ CSV
                                             </button>
@@ -626,12 +618,12 @@ $schedule_by_teacher = $conn->query("
                                         </td>
                                         <td>
                                             <?php if ($first_location): ?>
-                                                <strong><?php echo htmlspecialchars($test['test_name'] ?? ''); ?></strong>
+                                                <strong><?php echo h($test['test_name'] ?? ''); ?></strong>
                                             <?php endif; ?>
                                         </td>
                                         <td>
                                             <span class="badge <?php echo $loc_badge; ?>">
-                                                <?php echo htmlspecialchars($loc_row['location'] ?? ''); ?>
+                                                <?php echo h($loc_row['location'] ?? ''); ?>
                                                 <?php if ($loc_row['type'] === 'overflow'): ?>
                                                     <small>(overflow)</small>
                                                 <?php endif; ?>
@@ -651,7 +643,7 @@ $schedule_by_teacher = $conn->query("
                                                 <span class="badge badge-red">TBD</span>
                                             <?php else: ?>
                                                 <span class="badge badge-green">
-                                                    <?php echo htmlspecialchars($loc_row['proctor'] ?? ''); ?>
+                                                    <?php echo h($loc_row['proctor'] ?? ''); ?>
                                                 </span>
                                             <?php endif; ?>
                                         </td>
@@ -682,9 +674,9 @@ $schedule_by_teacher = $conn->query("
                             <?php foreach ($schedule_by_teacher as $row): ?>
                                 <tr>
                                     <td>
-                                        <strong><?php echo htmlspecialchars($row['teacher_name'] ?? ''); ?></strong>
+                                        <strong><?php echo h($row['teacher_name'] ?? ''); ?></strong>
                                     </td>
-                                    <td><?php echo htmlspecialchars($row['assignments'] ?? ''); ?></td>
+                                    <td><?php echo h($row['assignments'] ?? ''); ?></td>
                                     <td>
                                         <span class="badge <?php echo $row['total_assignments'] > 1
                                                                 ? 'badge-gold' : 'badge-green'; ?>">

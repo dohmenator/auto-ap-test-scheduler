@@ -1,8 +1,7 @@
 <?php
-$host = 'db';
-$dbname = 'ap_scheduler';
-$user = 'apuser';
-$password = 'appassword';
+require_once __DIR__ . '/../db.php';
+
+$school_year = get_school_year();
 
 $conn = new mysqli($host, $user, $password, $dbname);
 if ($conn->connect_error) {
@@ -235,7 +234,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
              location, school_year)
             VALUES 
             ('$teacher_name_escaped', '$test_name_escaped', 
-             '$test_date_escaped', '$day_number',
+             '$test_date_escaped', " . ($day_number !== NULL ? $day_number : 'NULL') . ",
              '$resolved_room_escaped', '$school_year')";
 
           if ($conn->query($sql)) {
@@ -368,7 +367,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
              location, school_year)
             VALUES 
             ('$teacher_name_escaped', '$test_name_escaped', 
-             '$test_date_escaped', '$day_number',
+             '$test_date_escaped', " . ($day_number !== NULL ? $day_number : 'NULL') . ",
              '$resolved_room_escaped', '$school_year')";
 
           if ($conn->query($sql)) {
@@ -472,14 +471,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
           $test_name_escaped = $conn->real_escape_string($test_name);
           $test_date_escaped = $conn->real_escape_string($test_date);
           $resolved_room_escaped = $conn->real_escape_string($resolved_room);
-          $day_number = $test['testing_day_number'];
+          $day_number = !empty($test['testing_day_number']) ? (int)$test['testing_day_number'] : NULL;
 
           $sql = "INSERT INTO proctor_assignments 
             (teacher_name, test_name, test_date, testing_day_number, 
              location, school_year)
             VALUES 
             ('$teacher_name_escaped', '$test_name_escaped', 
-             '$test_date_escaped', '$day_number',
+             '$test_date_escaped', " . ($day_number !== NULL ? $day_number : 'NULL') . ",
              '$resolved_room_escaped', '$school_year')";
 
           if ($conn->query($sql)) {
@@ -639,7 +638,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
              location, school_year)
             VALUES
             ('$teacher_name_escaped', '$test_name_escaped',
-             '$test_date_escaped', '$day_number',
+             '$test_date_escaped', " . ($day_number !== NULL ? $day_number : 'NULL') . ",
              '$location_escaped', '$school_year')";
 
           if ($conn->query($sql)) {
@@ -1248,7 +1247,7 @@ $acc_teachers = $acc_teachers_result->fetch_all(MYSQLI_ASSOC);
               <tbody>
                 <?php foreach ($multi_proctor_teachers as $t): ?>
                   <tr>
-                    <td><?php echo htmlspecialchars($t['teacher_name']); ?></td>
+                    <td><?php echo h($t['teacher_name']); ?></td>
                     <td>
                       <span class="badge badge-gold">
                         <?php echo $t['assignment_count']; ?> assignments
@@ -1283,8 +1282,8 @@ $acc_teachers = $acc_teachers_result->fetch_all(MYSQLI_ASSOC);
               <tbody>
                 <?php foreach ($no_assignment_teachers as $t): ?>
                   <tr>
-                    <td><?php echo htmlspecialchars($t['teacher_name']); ?></td>
-                    <td><?php echo htmlspecialchars($t['test_name']); ?></td>
+                    <td><?php echo h($t['teacher_name']); ?></td>
+                    <td><?php echo h($t['test_name']); ?></td>
                   </tr>
                 <?php endforeach; ?>
               </tbody>
@@ -1315,7 +1314,7 @@ $acc_teachers = $acc_teachers_result->fetch_all(MYSQLI_ASSOC);
               <tbody>
                 <?php foreach ($unassigned_check as $session): ?>
                   <tr>
-                    <td><?php echo htmlspecialchars($session['test_name']); ?></td>
+                    <td><?php echo h($session['test_name']); ?></td>
                     <td><?php echo date('M j, Y', strtotime($session['test_date'])); ?></td>
                     <td><?php echo $session['test_time']; ?></td>
                   </tr>
@@ -1401,7 +1400,7 @@ $acc_teachers = $acc_teachers_result->fetch_all(MYSQLI_ASSOC);
                     <!-- Test name — only on first location row -->
                     <td>
                       <?php if ($first_location): ?>
-                        <strong><?php echo htmlspecialchars($test['test_name'] ?? ''); ?></strong>
+                        <strong><?php echo h($test['test_name'] ?? ''); ?></strong>
                         <?php if ($test['total_students'] > 0): ?>
                           <br><small style="color:#888;">
                             <?php echo $test['total_students']; ?> total students
@@ -1415,7 +1414,7 @@ $acc_teachers = $acc_teachers_result->fetch_all(MYSQLI_ASSOC);
                     <!-- Location -->
                     <td>
                       <span class="badge <?php echo $loc_badge; ?>">
-                        <?php echo htmlspecialchars($loc_row['location'] ?? ''); ?>
+                        <?php echo h($loc_row['location'] ?? ''); ?>
                         <?php if ($loc_row['type'] === 'overflow'): ?>
                           <small>(overflow)</small>
                         <?php endif; ?>
@@ -1437,7 +1436,7 @@ $acc_teachers = $acc_teachers_result->fetch_all(MYSQLI_ASSOC);
                         <span class="badge badge-red">❌ TBD</span>
                       <?php else: ?>
                         <span class="badge badge-green">
-                          <?php echo htmlspecialchars($loc_row['proctor'] ?? ''); ?>
+                          <?php echo h($loc_row['proctor'] ?? ''); ?>
                         </span>
                       <?php endif; ?>
                     </td>
@@ -1458,17 +1457,17 @@ $acc_teachers = $acc_teachers_result->fetch_all(MYSQLI_ASSOC);
                       <form method="POST" style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap;">
                         <input type="hidden" name="action" value="override_proctor" />
                         <input type="hidden" name="test_name"
-                          value="<?php echo htmlspecialchars($test['test_name'] ?? ''); ?>" />
+                          value="<?php echo h($test['test_name'] ?? ''); ?>" />
                         <input type="hidden" name="test_date"
                           value="<?php echo $test['test_date']; ?>" />
                         <input type="hidden" name="override_location"
-                          value="<?php echo htmlspecialchars($loc_row['location'] ?? ''); ?>" />
+                          value="<?php echo h($loc_row['location'] ?? ''); ?>" />
                         <input type="hidden" name="override_type" value="replace" />
 
                         <span style="font-size:0.85rem; font-weight:600; color:#1a5c1a;">
                           <?php echo $is_unassigned ? 'Assign' : 'Override'; ?> proctor —
-                          <?php echo htmlspecialchars($test['test_name'] ?? ''); ?>
-                          (<?php echo htmlspecialchars($loc_row['location'] ?? ''); ?>)
+                          <?php echo h($test['test_name'] ?? ''); ?>
+                          (<?php echo h($loc_row['location'] ?? ''); ?>)
                         </span>
 
                         <?php if ($loc_row['type'] === 'main'): ?>
@@ -1479,9 +1478,9 @@ $acc_teachers = $acc_teachers_result->fetch_all(MYSQLI_ASSOC);
                             <optgroup label="0 assignments (suggested)">
                               <?php foreach ($all_teachers as $t): ?>
                                 <?php if ($t['assignment_count'] == 0): ?>
-                                  <option value="<?php echo htmlspecialchars($t['teacher_name']); ?>">
-                                    <?php echo htmlspecialchars($t['teacher_name']); ?>
-                                    (teaches <?php echo htmlspecialchars($t['test_name']); ?>) — 0 assignments
+                                  <option value="<?php echo h($t['teacher_name']); ?>">
+                                    <?php echo h($t['teacher_name']); ?>
+                                    (teaches <?php echo h($t['test_name']); ?>) — 0 assignments
                                   </option>
                                 <?php endif; ?>
                               <?php endforeach; ?>
@@ -1489,9 +1488,9 @@ $acc_teachers = $acc_teachers_result->fetch_all(MYSQLI_ASSOC);
                             <optgroup label="1 assignment">
                               <?php foreach ($all_teachers as $t): ?>
                                 <?php if ($t['assignment_count'] == 1): ?>
-                                  <option value="<?php echo htmlspecialchars($t['teacher_name']); ?>">
-                                    <?php echo htmlspecialchars($t['teacher_name']); ?>
-                                    (teaches <?php echo htmlspecialchars($t['test_name']); ?>) — 1 assignment
+                                  <option value="<?php echo h($t['teacher_name']); ?>">
+                                    <?php echo h($t['teacher_name']); ?>
+                                    (teaches <?php echo h($t['test_name']); ?>) — 1 assignment
                                   </option>
                                 <?php endif; ?>
                               <?php endforeach; ?>
@@ -1499,9 +1498,9 @@ $acc_teachers = $acc_teachers_result->fetch_all(MYSQLI_ASSOC);
                             <optgroup label="2 assignments">
                               <?php foreach ($all_teachers as $t): ?>
                                 <?php if ($t['assignment_count'] == 2): ?>
-                                  <option value="<?php echo htmlspecialchars($t['teacher_name']); ?>">
-                                    <?php echo htmlspecialchars($t['teacher_name']); ?>
-                                    (teaches <?php echo htmlspecialchars($t['test_name']); ?>) — 2 assignments
+                                  <option value="<?php echo h($t['teacher_name']); ?>">
+                                    <?php echo h($t['teacher_name']); ?>
+                                    (teaches <?php echo h($t['test_name']); ?>) — 2 assignments
                                   </option>
                                 <?php endif; ?>
                               <?php endforeach; ?>
@@ -1509,9 +1508,9 @@ $acc_teachers = $acc_teachers_result->fetch_all(MYSQLI_ASSOC);
                             <optgroup label="3+ assignments">
                               <?php foreach ($all_teachers as $t): ?>
                                 <?php if ($t['assignment_count'] >= 3): ?>
-                                  <option value="<?php echo htmlspecialchars($t['teacher_name']); ?>">
-                                    <?php echo htmlspecialchars($t['teacher_name']); ?>
-                                    (teaches <?php echo htmlspecialchars($t['test_name']); ?>) — <?php echo $t['assignment_count']; ?> assignments
+                                  <option value="<?php echo h($t['teacher_name']); ?>">
+                                    <?php echo h($t['teacher_name']); ?>
+                                    (teaches <?php echo h($t['test_name']); ?>) — <?php echo $t['assignment_count']; ?> assignments
                                   </option>
                                 <?php endif; ?>
                               <?php endforeach; ?>
@@ -1531,7 +1530,7 @@ $acc_teachers = $acc_teachers_result->fetch_all(MYSQLI_ASSOC);
                             list="teachers_list_<?php echo $override_id; ?>"
                             placeholder="Type or select a name..."
                             style="min-width:250px; padding:0.35rem 0.5rem; border-radius:4px; border:1px solid #ccc; font-size:0.85rem;"
-                            value="<?php echo htmlspecialchars($loc_row['proctor'] ?? ''); ?>" />
+                            value="<?php echo h($loc_row['proctor'] ?? ''); ?>" />
                           <datalist id="teachers_list_<?php echo $override_id; ?>">
 
                             <?php
@@ -1540,9 +1539,9 @@ $acc_teachers = $acc_teachers_result->fetch_all(MYSQLI_ASSOC);
                               <option disabled>— <?php echo $i; ?> assignment<?php echo $i !== 1 ? 's' : ''; ?> —</option>
                               <?php foreach ($acc_teachers as $t): ?>
                                 <?php if ($t['assignment_count'] == $i): ?>
-                                  <option value="<?php echo htmlspecialchars($t['teacher_name']); ?>">
-                                    <?php echo htmlspecialchars($t['teacher_name']); ?>
-                                    (teaches <?php echo htmlspecialchars($t['test_name']); ?>) — <?php echo $i; ?> assignment<?php echo $i !== 1 ? 's' : ''; ?>
+                                  <option value="<?php echo h($t['teacher_name']); ?>">
+                                    <?php echo h($t['teacher_name']); ?>
+                                    (teaches <?php echo h($t['test_name']); ?>) — <?php echo $i; ?> assignment<?php echo $i !== 1 ? 's' : ''; ?>
                                   </option>
                                 <?php endif; ?>
                               <?php endforeach; ?>
@@ -1573,44 +1572,44 @@ $acc_teachers = $acc_teachers_result->fetch_all(MYSQLI_ASSOC);
           </table>
         </div>
       <?php endif; ?>
-    </div>
-    <!-- </div> -->
+      <!-- </div> -->
 
 
 
 
 
-    <!-- ----------------------------------------
+
+      <!-- ----------------------------------------
            Schedule by Teacher
       ---------------------------------------- -->
-    <div class="card-section">
-      <h3 class="section-title">👩‍🏫 Schedule by Teacher</h3>
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Teacher</th>
-            <th>Proctor Assignments</th>
-            <th>Total</th>
-          </tr>
-        </thead>
-        <tbody>
-          <?php foreach ($schedule_by_teacher as $row): ?>
+      <div class="card-section">
+        <h3 class="section-title">👩‍🏫 Schedule by Teacher</h3>
+        <table class="data-table">
+          <thead>
             <tr>
-              <td>
-                <strong><?php echo htmlspecialchars($row['teacher_name'] ?? ''); ?></strong>
-              </td>
-              <td><?php echo htmlspecialchars($row['assignments'] ?? ''); ?></td>
-              <td>
-                <span class="badge <?php echo $row['total_assignments'] > 1
-                                      ? 'badge-gold' : 'badge-green'; ?>">
-                  <?php echo $row['total_assignments']; ?>
-                </span>
-              </td>
+              <th>Teacher</th>
+              <th>Proctor Assignments</th>
+              <th>Total</th>
             </tr>
-          <?php endforeach; ?>
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            <?php foreach ($schedule_by_teacher as $row): ?>
+              <tr>
+                <td>
+                  <strong><?php echo h($row['teacher_name'] ?? ''); ?></strong>
+                </td>
+                <td><?php echo h($row['assignments'] ?? ''); ?></td>
+                <td>
+                  <span class="badge <?php echo $row['total_assignments'] > 1
+                                        ? 'badge-gold' : 'badge-green'; ?>">
+                    <?php echo $row['total_assignments']; ?>
+                  </span>
+                </td>
+              </tr>
+            <?php endforeach; ?>
+          </tbody>
+        </table>
+      </div>
 
 
     </div>

@@ -1,8 +1,7 @@
 <?php
-$host = 'db';
-$dbname = 'ap_scheduler';
-$user = 'apuser';
-$password = 'appassword';
+require_once __DIR__ . '/../db.php';
+
+$school_year = get_school_year();
 
 $conn = new mysqli($host, $user, $password, $dbname);
 if ($conn->connect_error) {
@@ -19,6 +18,10 @@ $delete_warning = null;
 
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+  // Validate CSRF token
+  if (!validate_csrf_token($_POST['csrf_token'] ?? '')) {
+    die("Invalid request. Please go back and try again.");
+  }
 
   // Delete AP test
   if ($_POST['action'] === 'delete_test') {
@@ -167,7 +170,7 @@ $locations = $locations_result->fetch_all(MYSQLI_ASSOC);
       <?php if ($delete_warning): ?>
         <div class="card-section" style="border-left: 4px solid #dc3545;">
           <h3 class="section-title" style="color:#721c24">
-            ⚠️ Confirm Delete — <?php echo htmlspecialchars($delete_warning['test_name']); ?>
+            ⚠️ Confirm Delete — <?php echo h($delete_warning['test_name']); ?>
           </h3>
           <p style="margin-bottom:1rem; color:#333;">
             This test has linked data that will also be permanently deleted:
@@ -184,7 +187,7 @@ $locations = $locations_result->fetch_all(MYSQLI_ASSOC);
             <form method="POST" style="display:inline">
               <input type="hidden" name="action" value="delete_test" />
               <input type="hidden" name="test_id" value="<?php echo $delete_warning['test_id']; ?>" />
-              <input type="hidden" name="test_name" value="<?php echo htmlspecialchars($delete_warning['test_name']); ?>" />
+              <input type="hidden" name="test_name" value="<?php echo h($delete_warning['test_name']); ?>" />
               <input type="hidden" name="force_delete" value="1" />
               <button type="submit" class="btn btn-danger">
                 🗑️ Yes, Delete Everything
@@ -198,7 +201,7 @@ $locations = $locations_result->fetch_all(MYSQLI_ASSOC);
       <!-- Datalist for location suggestions -->
       <datalist id="locations">
         <?php foreach ($locations as $loc): ?>
-          <option value="<?php echo htmlspecialchars($loc['location']); ?>">
+          <option value="<?php echo h($loc['location']); ?>">
           <?php endforeach; ?>
       </datalist>
 
@@ -208,6 +211,7 @@ $locations = $locations_result->fetch_all(MYSQLI_ASSOC);
       <div class="card-section">
         <h3 class="section-title">Add New AP Test</h3>
         <form method="POST">
+          <?php echo csrf_input(); ?>
           <input type="hidden" name="action" value="add_test" />
           <div class="form-row">
             <div class="form-group">
@@ -261,6 +265,7 @@ $locations = $locations_result->fetch_all(MYSQLI_ASSOC);
         </p>
 
         <form method="POST">
+          <?php echo csrf_input(); ?>
           <input type="hidden" name="action" value="save_rooms" />
           <table class="data-table">
             <thead>
@@ -279,12 +284,12 @@ $locations = $locations_result->fetch_all(MYSQLI_ASSOC);
             <tbody>
               <?php foreach ($tests as $test): ?>
                 <tr>
-                  <td><strong><?php echo htmlspecialchars($test['test_name']); ?></strong></td>
+                  <td><strong><?php echo h($test['test_name']); ?></strong></td>
                   <td>
                     <input
                       type="text"
                       name="test[<?php echo $test['id']; ?>][main_location]"
-                      value="<?php echo htmlspecialchars($test['main_location']); ?>"
+                      value="<?php echo h($test['main_location']); ?>"
                       list="locations"
                       class="table-input" />
                   </td>
@@ -292,7 +297,7 @@ $locations = $locations_result->fetch_all(MYSQLI_ASSOC);
                     <input
                       type="text"
                       name="test[<?php echo $test['id']; ?>][accommodations_location]"
-                      value="<?php echo htmlspecialchars($test['accommodations_location']); ?>"
+                      value="<?php echo h($test['accommodations_location']); ?>"
                       list="locations"
                       class="table-input" />
                   </td>
@@ -300,7 +305,7 @@ $locations = $locations_result->fetch_all(MYSQLI_ASSOC);
                     <input
                       type="text"
                       name="test[<?php echo $test['id']; ?>][overflow_location]"
-                      value="<?php echo htmlspecialchars($test['overflow_location']); ?>"
+                      value="<?php echo h($test['overflow_location']); ?>"
                       list="locations"
                       class="table-input" />
                   </td>
@@ -353,7 +358,7 @@ $locations = $locations_result->fetch_all(MYSQLI_ASSOC);
             <input type="hidden" name="action" value="delete_test" />
             <input type="hidden" name="test_id" value="<?php echo $test['id']; ?>" />
             <input type="hidden" name="test_name"
-              value="<?php echo htmlspecialchars($test['test_name']); ?>" />
+              value="<?php echo h($test['test_name']); ?>" />
           </form>
         <?php endforeach; ?>
 

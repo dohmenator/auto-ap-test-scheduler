@@ -1,11 +1,14 @@
+<?php require_once __DIR__ . '/db.php'; ?>
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Auto AP Test Scheduler | Viera High School</title>
   <link rel="stylesheet" href="css/styles.css" />
 </head>
+
 <body>
 
   <header>
@@ -85,7 +88,7 @@
           <div class="card-icon">⬇️</div>
           <div class="card-content">
             <h2>View & Download</h2>
-            <p>View generated schedules and download Excel files for Google Sheets.</p>
+            <p>View generated schedules and download CSV files for Google Sheets.</p>
           </div>
         </a>
 
@@ -99,4 +102,5 @@
   </footer>
 
 </body>
+
 </html>
