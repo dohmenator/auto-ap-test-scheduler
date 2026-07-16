@@ -26,27 +26,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
   // Delete AP test
   if ($_POST['action'] === 'delete_test') {
     $test_id = (int)$_POST['test_id'];
-    $test_name = $conn->real_escape_string($_POST['test_name']);
+    $test_name = sanitize_string($_POST['test_name']);
 
-    // Check for dependencies
-    $teacher_count = $conn->query("
-        SELECT COUNT(*) as cnt FROM ap_teachers 
-        WHERE test_name = '$test_name'
-    ")->fetch_assoc()['cnt'];
+    // Check for dependencies using prepared statements
+    $stmt = $conn->prepare("SELECT COUNT(*) as cnt FROM ap_teachers WHERE test_name = ?");
+    $stmt->bind_param("s", $test_name);
+    $stmt->execute();
+    $teacher_count = $stmt->get_result()->fetch_assoc()['cnt'];
 
-    $student_count = $conn->query("
-        SELECT COUNT(*) as cnt FROM students 
-        WHERE course_enrolled = '$test_name'
-    ")->fetch_assoc()['cnt'];
+    $stmt = $conn->prepare("SELECT COUNT(*) as cnt FROM students WHERE course_enrolled = ?");
+    $stmt->bind_param("s", $test_name);
+    $stmt->execute();
+    $student_count = $stmt->get_result()->fetch_assoc()['cnt'];
 
-    $proctor_count = $conn->query("
-        SELECT COUNT(*) as cnt FROM proctor_assignments 
-        WHERE test_name = '$test_name'
-    ")->fetch_assoc()['cnt'];
+    $stmt = $conn->prepare("SELECT COUNT(*) as cnt FROM proctor_assignments WHERE test_name = ?");
+    $stmt->bind_param("s", $test_name);
+    $stmt->execute();
+    $proctor_count = $stmt->get_result()->fetch_assoc()['cnt'];
 
     $force_delete = isset($_POST['force_delete']) && $_POST['force_delete'] === '1';
 
-    // if (($teacher_count > 0 || $student_count > 0 || $proctor_count > 0) && !$force_delete) {
     //only populate $delete_warning if there are students enrolled, since teachers and proctors can be deleted without warning
     if ($student_count > 0 && !$force_delete) {
       // Show warning — don't delete yet
@@ -59,11 +58,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
       ];
     } else {
       // Safe to delete — remove dependencies first
-      $conn->query("DELETE FROM ap_teachers WHERE test_name = '$test_name'");
-      $conn->query("DELETE FROM students WHERE course_enrolled = '$test_name'");
-      $conn->query("DELETE FROM proctor_assignments WHERE test_name = '$test_name'");
-      $conn->query("DELETE FROM test_room_overrides WHERE test_name = '$test_name'");
-      $conn->query("DELETE FROM ap_tests WHERE id = $test_id");
+      $stmt = $conn->prepare("DELETE FROM ap_teachers WHERE test_name = ?");
+      $stmt->bind_param("s", $test_name);
+      $stmt->execute();
+
+      $stmt = $conn->prepare("DELETE FROM students WHERE course_enrolled = ?");
+      $stmt->bind_param("s", $test_name);
+      $stmt->execute();
+
+      $stmt = $conn->prepare("DELETE FROM proctor_assignments WHERE test_name = ?");
+      $stmt->bind_param("s", $test_name);
+      $stmt->execute();
+
+      $stmt = $conn->prepare("DELETE FROM test_room_overrides WHERE test_name = ?");
+      $stmt->bind_param("s", $test_name);
+      $stmt->execute();
+
+      $stmt = $conn->prepare("DELETE FROM ap_tests WHERE id = ?");
+      $stmt->bind_param("i", $test_id);
+      $stmt->execute();
+
       $success_message = "AP test '$test_name' deleted successfully.";
     }
   }
@@ -71,22 +85,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
   // Save room assignment edits
   if ($_POST['action'] === 'save_rooms') {
     $errors = [];
+    $stmt = $conn->prepare("
+    UPDATE ap_tests SET 
+        main_location = ?,
+        accommodations_location = ?,
+        overflow_location = ?
+    WHERE id = ?
+");
+
     foreach ($_POST['test'] as $test_id => $data) {
       $test_id = (int)$test_id;
-      $main_location = $conn->real_escape_string($data['main_location']);
-      $accommodations_location = $conn->real_escape_string($data['accommodations_location']);
-      $overflow_location = $conn->real_escape_string($data['overflow_location']);
+      $main_location = sanitize_string($data['main_location']);
+      $accommodations_location = sanitize_string($data['accommodations_location']);
+      $overflow_location = sanitize_string($data['overflow_location']);
 
-      $sql = "UPDATE ap_tests SET 
-                        main_location = '$main_location',
-                        accommodations_location = '$accommodations_location',
-                        overflow_location = '$overflow_location'
-                    WHERE id = $test_id";
+      $stmt->bind_param(
+        "sssi",
+        $main_location,
+        $accommodations_location,
+        $overflow_location,
+        $test_id
+      );
 
-      if (!$conn->query($sql)) {
-        $errors[] = $conn->error;
+      if (!$stmt->execute()) {
+        $errors[] = $stmt->error;
       }
     }
+
     if (empty($errors)) {
       $success_message = "Room assignments saved successfully!";
     } else {
@@ -96,19 +121,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
   // Add new AP test
   if ($_POST['action'] === 'add_test') {
-    $test_name = $conn->real_escape_string(trim($_POST['test_name']));
-    $main_location = $conn->real_escape_string(trim($_POST['main_location']));
-    $accommodations_location = $conn->real_escape_string(trim($_POST['accommodations_location']));
-    $overflow_location = $conn->real_escape_string(trim($_POST['overflow_location']));
+    $test_name = sanitize_string($_POST['test_name']);
+    $main_location = sanitize_string($_POST['main_location']);
+    $accommodations_location = sanitize_string($_POST['accommodations_location']);
+    $overflow_location = sanitize_string($_POST['overflow_location']);
 
     if (empty($test_name) || empty($main_location) || empty($accommodations_location)) {
       $error_message = "Test name, main location, and accommodations location are required.";
     } else {
-      $sql = "INSERT INTO ap_tests 
-                        (test_name, main_location, accommodations_location, overflow_location)
-                    VALUES 
-                        ('$test_name', '$main_location', '$accommodations_location', '$overflow_location')";
-      if ($conn->query($sql)) {
+      $stmt = $conn->prepare("
+        INSERT INTO ap_tests 
+            (test_name, main_location, accommodations_location, overflow_location)
+        VALUES (?, ?, ?, ?)
+    ");
+      $stmt->bind_param(
+        "ssss",
+        $test_name,
+        $main_location,
+        $accommodations_location,
+        $overflow_location
+      );
+      if ($stmt->execute()) {
         $success_message = "New AP test added successfully!";
       } else {
         $error_message = "Error adding test. It may already exist.";
