@@ -41,41 +41,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
         // Skip empty rows
         if (empty(array_filter($row))) continue;
-
-        $teacher_name = $conn->real_escape_string(trim($row[0] ?? ''));
-        $test_name = $conn->real_escape_string(trim($row[1] ?? ''));
+        $teacher_name = sanitize_string($row[0] ?? '');
+        $test_name = sanitize_string($row[1] ?? '');
 
         if (empty($teacher_name) || empty($test_name)) {
           $skipped++;
           continue;
         }
 
-        // Check if test exists in ap_tests
-        $test_check = $conn->query("SELECT id FROM ap_tests WHERE test_name = '$test_name'");
-        if ($test_check->num_rows === 0) {
+        // Check if test exists
+        $stmt = $conn->prepare("SELECT id FROM ap_tests WHERE test_name = ?");
+        $stmt->bind_param("s", $test_name);
+        $stmt->execute();
+        if ($stmt->get_result()->num_rows === 0) {
           $errors[] = "Row $row_number: Test '$test_name' not found in AP Tests.";
           $skipped++;
           continue;
         }
 
         // Check for duplicate
-        $dup_check = $conn->query("
-                    SELECT id FROM ap_teachers 
-                    WHERE teacher_name = '$teacher_name' 
-                    AND test_name = '$test_name'
-                ");
-        if ($dup_check->num_rows > 0) {
+        $stmt = $conn->prepare("
+    SELECT id FROM ap_teachers 
+    WHERE teacher_name = ? AND test_name = ?
+");
+        $stmt->bind_param("ss", $teacher_name, $test_name);
+        $stmt->execute();
+        if ($stmt->get_result()->num_rows > 0) {
           $skipped++;
           continue;
         }
 
         // Insert teacher
-        $sql = "INSERT INTO ap_teachers (teacher_name, test_name, active)
-                        VALUES ('$teacher_name', '$test_name', 1)";
-        if ($conn->query($sql)) {
+        $stmt = $conn->prepare("
+    INSERT INTO ap_teachers (teacher_name, test_name, active)
+    VALUES (?, ?, 1)
+");
+        $stmt->bind_param("ss", $teacher_name, $test_name);
+        if ($stmt->execute()) {
           $added++;
         } else {
-          $errors[] = "Row $row_number: " . $conn->error;
+          $errors[] = "Row $row_number: " . $stmt->error;
           $skipped++;
         }
       }
@@ -96,18 +101,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
   // Add new teacher
   if ($_POST['action'] === 'add_teacher') {
-    $teacher_name = $conn->real_escape_string(trim($_POST['teacher_name']));
-    $test_name = $conn->real_escape_string(trim($_POST['test_name']));
+    $teacher_name = sanitize_string($_POST['teacher_name']);
+    $test_name = sanitize_string($_POST['test_name']);
 
     if (empty($teacher_name) || empty($test_name)) {
       $error_message = "Teacher name and AP test are required.";
     } else {
-      $sql = "INSERT INTO ap_teachers (teacher_name, test_name, active)
-                    VALUES ('$teacher_name', '$test_name', 1)";
-      if ($conn->query($sql)) {
+      $stmt = $conn->prepare("
+        INSERT INTO ap_teachers (teacher_name, test_name, active)
+        VALUES (?, ?, 1)
+    ");
+      $stmt->bind_param("ss", $teacher_name, $test_name);
+      if ($stmt->execute()) {
         $success_message = "Teacher added successfully!";
       } else {
-        $error_message = "Error adding teacher: " . $conn->error;
+        $error_message = "Error adding teacher: " . $stmt->error;
       }
     }
   }
@@ -115,17 +123,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
   // Update teacher
   if ($_POST['action'] === 'update_teacher') {
     $teacher_id = (int)$_POST['teacher_id'];
-    $teacher_name = $conn->real_escape_string(trim($_POST['teacher_name']));
-    $test_name = $conn->real_escape_string(trim($_POST['test_name']));
+    $teacher_name = sanitize_string($_POST['teacher_name']);
+    $test_name = sanitize_string($_POST['test_name']);
 
-    $sql = "UPDATE ap_teachers SET 
-                    teacher_name = '$teacher_name',
-                    test_name = '$test_name'
-                WHERE id = $teacher_id";
-    if ($conn->query($sql)) {
+    $stmt = $conn->prepare("
+    UPDATE ap_teachers SET 
+        teacher_name = ?,
+        test_name = ?
+    WHERE id = ?
+");
+    $stmt->bind_param("ssi", $teacher_name, $test_name, $teacher_id);
+    if ($stmt->execute()) {
       $success_message = "Teacher updated successfully!";
     } else {
-      $error_message = "Error updating teacher: " . $conn->error;
+      $error_message = "Error updating teacher: " . $stmt->error;
     }
   }
 
@@ -240,6 +251,7 @@ $tests = $tests_result->fetch_all(MYSQLI_ASSOC);
         <?php endif; ?>
 
         <form method="POST" enctype="multipart/form-data">
+          <?php echo csrf_input(); ?>
           <input type="hidden" name="action" value="bulk_upload" />
           <div class="form-row">
             <div class="form-group">
@@ -327,6 +339,7 @@ $tests = $tests_result->fetch_all(MYSQLI_ASSOC);
                         ✏️ Edit
                       </button>
                       <form method="POST" style="display:inline">
+                        <?php echo csrf_input(); ?>
                         <input type="hidden" name="action" value="toggle_active" />
                         <input type="hidden" name="teacher_id" value="<?php echo $teacher['id']; ?>" />
                         <input type="hidden" name="current_active" value="1" />
@@ -406,6 +419,7 @@ $tests = $tests_result->fetch_all(MYSQLI_ASSOC);
                   <td>
                     <div class="action-btns">
                       <form method="POST" style="display:inline">
+                        <?php echo csrf_input(); ?>
                         <input type="hidden" name="action" value="toggle_active" />
                         <input type="hidden" name="teacher_id" value="<?php echo $teacher['id']; ?>" />
                         <input type="hidden" name="current_active" value="0" />
@@ -414,6 +428,7 @@ $tests = $tests_result->fetch_all(MYSQLI_ASSOC);
                         </button>
                       </form>
                       <form method="POST" style="display:inline">
+                        <?php echo csrf_input(); ?>
                         <input type="hidden" name="action" value="delete_teacher" />
                         <input type="hidden" name="teacher_id" value="<?php echo $teacher['id']; ?>" />
                         <button
