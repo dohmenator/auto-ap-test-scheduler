@@ -22,36 +22,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
   }
 
   if ($_POST['action'] === 'save_period') {
-    $school_year_input = $conn->real_escape_string($_POST['school_year']);
-    $period_start = $conn->real_escape_string($_POST['period_start']);
-    $period_end = $conn->real_escape_string($_POST['period_end']);
 
-    // Validate period dates
-    $parsed_start = DateTime::createFromFormat('Y-m-d', $period_start);
-    $parsed_end = DateTime::createFromFormat('Y-m-d', $period_end);
+    $school_year_input = sanitize_string($_POST['school_year']);
+    $period_start = sanitize_date($_POST['period_start']);
+    $period_end = sanitize_date($_POST['period_end']);
 
-    if (!$parsed_start || !$parsed_end) {
-      $error_message = "Invalid date format. Please use the date picker.";
-    } elseif ((int)$parsed_start->format('Y') < 2020 || (int)$parsed_start->format('Y') > 2040) {
-      $error_message = "Invalid year detected in start date. Please check.";
-    } elseif ((int)$parsed_end->format('Y') < 2020 || (int)$parsed_end->format('Y') > 2040) {
-      $error_message = "Invalid year detected in end date. Please check.";
-    } elseif ($parsed_start >= $parsed_end) {
-      $error_message = "End date must be after start date.";
-    } elseif ($parsed_start->diff($parsed_end)->days > 14) {
-      $error_message = "Testing window cannot exceed 14 days.";
-    } else {
-      $sql = "INSERT INTO testing_period 
-                        (school_year, period_start, period_end)
-                    VALUES 
-                        ('$school_year_input', '$period_start', '$period_end')
-                    ON DUPLICATE KEY UPDATE 
-                        period_start = '$period_start',
-                        period_end = '$period_end'";
+    $stmt = $conn->prepare("
+    INSERT INTO testing_period 
+        (school_year, period_start, period_end)
+    VALUES (?, ?, ?)
+    ON DUPLICATE KEY UPDATE 
+        period_start = ?,
+        period_end = ?
+");
+    $stmt->bind_param(
+      "sssss",
+      $school_year_input,
+      $period_start,
+      $period_end,
+      $period_start,
+      $period_end
+    );
 
-      if ($conn->query($sql)) {
-        // Recalculate day numbers for existing test dates
-        $conn->query("UPDATE ap_tests SET 
+    if ($stmt->execute()) {
+      // Recalculate day numbers - no user input in this query so query() is fine
+      $conn->query("UPDATE ap_tests SET 
         testing_day_number = CASE 
             WHEN DATEDIFF(test_date, '$period_start') + 1 BETWEEN 1 AND 127 
             THEN DATEDIFF(test_date, '$period_start') + 1
@@ -63,10 +58,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             ELSE 0 
         END
         WHERE test_date IS NOT NULL");
-        $success_message = "Testing period saved successfully!";
-      } else {
-        $error_message = "Error saving testing period: " . $conn->error;
-      }
+      $success_message = "Testing period saved successfully!";
+    } else {
+      $error_message = "Error saving testing period: " . $stmt->error;
     }
   }
 
@@ -86,7 +80,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
     foreach ($_POST['test_date'] as $test_id => $test_date) {
       $test_id = (int)$test_id;
-      $test_time = $conn->real_escape_string($_POST['test_time'][$test_id] ?? '');
+      $test_time = sanitize_string($_POST['test_time'][$test_id] ?? '');
 
       // Skip empty dates
       if (empty($test_date)) {
@@ -124,26 +118,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
           $test_name_result = $conn->query("SELECT test_name FROM ap_tests WHERE id = $test_id");
           $test_name_row = $test_name_result->fetch_assoc();
           // Save it anyway even though it's outside the window
-          $test_date_clean = $conn->real_escape_string($test_date);
-          $time_value = !empty($test_time) ? "'$test_time'" : "NULL";
-          $conn->query("UPDATE ap_tests SET 
-            test_date = '$test_date_clean',
-            test_time = $time_value
-            WHERE id = $test_id");
-          $errors[] = "⚠️ Warning: Date '$test_date' for '{$test_name_row['test_name']}' is outside the testing window. Saved anyway.";
-          continue;
+
+          $stmt = $conn->prepare("
+          UPDATE ap_tests SET 
+              test_date = ?,
+              test_time = ?
+              WHERE id = ?
+        ");
+          $test_time_val = !empty($test_time) ? $test_time : null;
+          $stmt->bind_param("ssi", $test_date, $test_time_val, $test_id);
+          if (!$stmt->execute()) {
+            $errors[] = $stmt->error;
+          }
         }
       }
 
-      $test_date_clean = $conn->real_escape_string($test_date);
-      $time_value = !empty($test_time) ? "'$test_time'" : "NULL";
-
-      $sql = "UPDATE ap_tests SET 
-                        test_date = '$test_date_clean',
-                        test_time = $time_value
-                    WHERE id = $test_id";
-      if (!$conn->query($sql)) {
-        $errors[] = $conn->error;
+      $stmt = $conn->prepare("UPDATE ap_tests SET test_date = ?, test_time = ? WHERE id = ?");
+      $test_time_val = !empty($test_time) ? $test_time : null;
+      $stmt->bind_param("ssi", $test_date, $test_time_val, $test_id);
+      if (!$stmt->execute()) {
+        $errors[] = $stmt->error;
       }
     }
 

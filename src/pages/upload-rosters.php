@@ -52,13 +52,15 @@ function detectAccommodationType($accommodations)
 // ------------------------------------------------
 function assignLocation($accommodation_type, $test_name, $conn)
 {
-  $test_name_escaped = $conn->real_escape_string($test_name);
-  $test = $conn->query("
-        SELECT main_location, accommodations_location 
-        FROM ap_tests 
-        WHERE test_name = '$test_name_escaped'
-        LIMIT 1
-    ")->fetch_assoc();
+  $stmt = $conn->prepare("
+    SELECT main_location, accommodations_location 
+    FROM ap_tests 
+    WHERE test_name = ?
+    LIMIT 1
+");
+  $stmt->bind_param("s", $test_name);
+  $stmt->execute();
+  $test = $stmt->get_result()->fetch_assoc();
 
   if (!$test) return 'Unknown';
 
@@ -91,6 +93,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
       $errors = [];
       $row_number = 0;
       $headers = [];
+      $course_cleared = false;
+      $replaced_notice = '';
 
       // Expected column headers from College Board CSV
       $expected_headers = [
@@ -109,15 +113,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         'Approved SSD Accommodations'
       ];
 
+      $added = 0;
+      $skipped = 0;
+      $errors = [];
+      $row_number = 0;
+      $headers = [];
+      $course_cleared = false;
+      $replaced_notice = '';
+
       while (($row = fgetcsv($handle)) !== false) {
         $row_number++;
 
-        // Skip the first 5 metadata rows College Board includes
-        if ($row_number <= 5) continue;
-
-        // Row 6 should be headers
-        if ($row_number === 6) {
-          $headers = array_map('trim', $row);
+        // Auto-detect header row by looking for 'Student First Name'
+        if (empty($headers)) {
+          if (in_array('Student First Name', array_map('trim', $row))) {
+            $headers = array_map('trim', $row);
+          }
           continue;
         }
 
@@ -127,20 +138,50 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         // Map headers to values
         $data = array_combine($headers, array_pad($row, count($headers), ''));
 
+        // Skip late testers
+        $class_section_type = sanitize_string($data['Class Section Type'] ?? '');
+        if (stripos($class_section_type, 'late') !== false) {
+          $skipped++;
+          continue;
+        }
+
+        // On first student row detect course and clear existing roster
+        if (!$course_cleared) {
+          $detected_course = sanitize_string($data['Course Enrolled In'] ?? '');
+          if (!empty($detected_course)) {
+            $stmt = $conn->prepare("
+                DELETE FROM students 
+                WHERE course_enrolled = ? 
+                AND school_year = ?
+            ");
+            $stmt->bind_param("ss", $detected_course, $school_year);
+            $stmt->execute();
+            $deleted = $stmt->affected_rows;
+            if ($deleted > 0) {
+              $replaced_notice = "Replaced existing roster of $deleted student(s) for $detected_course. ";
+            }
+          }
+          $course_cleared = true;
+        }
+
         // Extract fields
-        $first_name = $conn->real_escape_string(trim($data['Student First Name'] ?? ''));
-        $last_name = $conn->real_escape_string(trim($data['Student Last Name'] ?? ''));
-        $school_code = $conn->real_escape_string(trim($data['School Code'] ?? ''));
-        $grade = $conn->real_escape_string(trim($data['Grade'] ?? ''));
-        $email = $conn->real_escape_string(trim($data['Email Address'] ?? ''));
-        $ap_id = $conn->real_escape_string(trim($data['AP ID'] ?? ''));
-        $student_id = $conn->real_escape_string(trim($data['Student ID'] ?? ''));
-        $course_enrolled = $conn->real_escape_string(trim($data['Course Enrolled In'] ?? ''));
-        $class_section_name = $conn->real_escape_string(trim($data['Class Section Name'] ?? ''));
-        $class_section_type = $conn->real_escape_string(trim($data['Class Section Type'] ?? ''));
-        $teacher_name = $conn->real_escape_string(trim($data['Teacher Name(s)'] ?? ''));
-        $exam_date = $conn->real_escape_string(trim($data['Exam Date'] ?? ''));
+        $first_name = sanitize_string($data['Student First Name'] ?? '');
+        $last_name = sanitize_string($data['Student Last Name'] ?? '');
+        $school_code = sanitize_string($data['School Code'] ?? '');
+        $grade = sanitize_string($data['Grade'] ?? '');
+        $email = sanitize_email($data['Email Address'] ?? '');
+        $ap_id = sanitize_string($data['AP ID'] ?? '');
+        $student_id = sanitize_string($data['Student ID'] ?? '');
+        $course_enrolled = sanitize_string($data['Course Enrolled In'] ?? '');
+        $class_section_name = sanitize_string($data['Class Section Name'] ?? '');
+        $teacher_name = sanitize_string($data['Teacher Name(s)'] ?? '');
+        $exam_date = sanitize_string($data['Exam Date'] ?? '');
         $accommodations = trim($data['Approved SSD Accommodations'] ?? '');
+
+        // Treat bare "SSD" placeholder as no accommodations
+        if (strtoupper(trim($accommodations)) === 'SSD') {
+          $accommodations = '';
+        }
 
         // Skip if no name
         if (empty($first_name) && empty($last_name)) {
@@ -154,32 +195,61 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         // Assign location
         $assigned_location = assignLocation($accommodation_type, $course_enrolled, $conn);
 
-        $accommodations_escaped = $conn->real_escape_string($accommodations);
+        // Insert student using prepared statement
+        $stmt = $conn->prepare("
+        INSERT INTO students (
+            first_name, last_name, school_code, grade, email,
+            ap_id, student_id, course_enrolled, class_section_name,
+            class_section_type, teacher_name, exam_date,
+            accommodations, accommodation_type, assigned_location,
+            school_year
+        ) VALUES (
+            ?, ?, ?, ?, ?,
+            ?, ?, ?, ?,
+            ?, ?, ?,
+            ?, ?, ?,
+            ?
+        )
+    ");
 
-        // Insert student
-        $sql = "INSERT INTO students (
-                    first_name, last_name, school_code, grade, email,
-                    ap_id, student_id, course_enrolled, class_section_name,
-                    class_section_type, teacher_name, exam_date,
-                    accommodations, accommodation_type, assigned_location,
-                    school_year
-                ) VALUES (
-                    '$first_name', '$last_name', '$school_code', '$grade', '$email',
-                    '$ap_id', '$student_id', '$course_enrolled', '$class_section_name',
-                    '$class_section_type', '$teacher_name', '$exam_date',
-                    '$accommodations_escaped', '$accommodation_type', '$assigned_location',
-                    '$school_year'
-                )";
+        $stmt->bind_param(
+          "ssssssssssssssss",
+          $first_name,
+          $last_name,
+          $school_code,
+          $grade,
+          $email,
+          $ap_id,
+          $student_id,
+          $course_enrolled,
+          $class_section_name,
+          $class_section_type,
+          $teacher_name,
+          $exam_date,
+          $accommodations,
+          $accommodation_type,
+          $assigned_location,
+          $school_year
+        );
 
-        if ($conn->query($sql)) {
+        if ($stmt->execute()) {
           $added++;
         } else {
-          $errors[] = "Row $row_number: " . $conn->error;
+          $errors[] = "Row $row_number: " . $stmt->error;
           $skipped++;
         }
       }
 
       fclose($handle);
+
+      if ($added > 0) {
+        $success_message = $replaced_notice .
+          "Upload complete: $added student(s) added, $skipped skipped.";
+      } else {
+        $error_message = "No students were added. Please check the file format.";
+      }
+
+
 
       $upload_results = [
         'added' => $added,
