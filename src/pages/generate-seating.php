@@ -2,6 +2,8 @@
 require_once __DIR__ . '/../db.php';
 
 $school_year = get_school_year();
+// TEMP DEBUG
+error_log("School year: " . $school_year);
 
 $conn = new mysqli($host, $user, $password, $dbname);
 if ($conn->connect_error) {
@@ -20,98 +22,81 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
   if ($_POST['action'] === 'generate_seating') {
 
     // Clear existing seating assignments for this year
-    $conn->query("
-            UPDATE students 
-            SET seat_number = NULL, assigned_location = NULL
-            WHERE school_year = '$school_year'
-        ");
+    $stmt = $conn->prepare("
+    UPDATE students 
+    SET seat_number = NULL, assigned_location = NULL
+    WHERE school_year = ?
+");
+    $stmt->bind_param("s", $school_year);
+    $stmt->execute();
 
     // Fetch all AP tests that have students
-    $tests_result = $conn->query("
-            SELECT DISTINCT s.course_enrolled, 
-                           t.main_location,
-                           t.accommodations_location,
-                           t.overflow_location,
-                           t.test_date,
-                           t.test_time
-            FROM students s
-            JOIN ap_tests t ON s.course_enrolled = t.test_name
-            WHERE s.school_year = '$school_year'
-            ORDER BY t.test_date ASC, s.course_enrolled ASC
-        ");
-    $tests = $tests_result->fetch_all(MYSQLI_ASSOC);
-
+    $stmt = $conn->prepare("
+    SELECT DISTINCT s.course_enrolled, 
+                   t.main_location,
+                   t.accommodations_location,
+                   t.overflow_location,
+                   t.test_date,
+                   t.test_time
+    FROM students s
+    JOIN ap_tests t ON s.course_enrolled = t.test_name
+    WHERE s.school_year = ?
+    ORDER BY t.test_date ASC, s.course_enrolled ASC
+");
+    $stmt->bind_param("s", $school_year);
+    $stmt->execute();
+    $tests = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
     $charts_generated = 0;
 
     foreach ($tests as $test) {
-      $course = $conn->real_escape_string($test['course_enrolled']);
       $main_location = $test['main_location'];
       $acc_location = $test['accommodations_location'];
       $overflow_location = $test['overflow_location'] ?? 'Media Center';
+      $course = $test['course_enrolled'];
 
-      // ----------------------------------------
-      // Fetch proctor for each location
-      // ----------------------------------------
-      $proctor_result = $conn->query("
-                SELECT teacher_name, location
-                FROM proctor_assignments
-                WHERE test_name = '$course'
-                AND school_year = '$school_year'
-                ORDER BY id ASC
-            ");
-      $proctors_by_location = [];
-      while ($p = $proctor_result->fetch_assoc()) {
-        $loc = $p['location'];
-        if (!isset($proctors_by_location[$loc])) {
-          $proctors_by_location[$loc] = [];
-        }
-        $proctors_by_location[$loc][] = $p['teacher_name'];
-      }
+      $stmt = $conn->prepare("
+    SELECT * FROM students
+    WHERE course_enrolled = ?
+    AND school_year = ?
+    AND accommodation_type = 'preferential_only'
+    ORDER BY last_name ASC, first_name ASC
+");
+      $stmt->bind_param("ss", $course, $school_year);
+      $stmt->execute();
+      $pref_students = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
 
-      // ----------------------------------------
-      // Fetch students grouped by accommodation type
-      // ----------------------------------------
+      $stmt = $conn->prepare("
+    SELECT * FROM students
+    WHERE course_enrolled = ?
+    AND school_year = ?
+    AND accommodation_type = 'none'
+    ORDER BY last_name ASC, first_name ASC
+");
+      $stmt->bind_param("ss", $course, $school_year);
+      $stmt->execute();
+      $none_students = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
 
-      // Group 1: Preferential seating only → Main location (seats first)
-      $pref_result = $conn->query("
-                SELECT * FROM students
-                WHERE course_enrolled = '$course'
-                AND school_year = '$school_year'
-                AND accommodation_type = 'preferential_only'
-                ORDER BY last_name ASC, first_name ASC
-            ");
-      $pref_students = $pref_result->fetch_all(MYSQLI_ASSOC);
+      $stmt = $conn->prepare("
+    SELECT * FROM students
+    WHERE course_enrolled = ?
+    AND school_year = ?
+    AND accommodation_type IN ('extended_50', 'other')
+    ORDER BY last_name ASC, first_name ASC
+");
+      $stmt->bind_param("ss", $course, $school_year);
+      $stmt->execute();
+      $acc_students = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
 
-      // Group 2: No accommodations → Main location
-      $none_result = $conn->query("
-                SELECT * FROM students
-                WHERE course_enrolled = '$course'
-                AND school_year = '$school_year'
-                AND accommodation_type = 'none'
-                ORDER BY last_name ASC, first_name ASC
-            ");
-      $none_students = $none_result->fetch_all(MYSQLI_ASSOC);
-
-      // Group 3: 50% extended time + other → Accommodations room
-      $acc_result = $conn->query("
-                SELECT * FROM students
-                WHERE course_enrolled = '$course'
-                AND school_year = '$school_year'
-                AND accommodation_type IN ('extended_50', 'other')
-                ORDER BY last_name ASC, first_name ASC
-            ");
-      $acc_students = $acc_result->fetch_all(MYSQLI_ASSOC);
-
-      // Group 4: 100% double time → Guidance
-      $dbl_result = $conn->query("
-                SELECT * FROM students
-                WHERE course_enrolled = '$course'
-                AND school_year = '$school_year'
-                AND accommodation_type = 'extended_100'
-                ORDER BY last_name ASC, first_name ASC
-            ");
-      $dbl_students = $dbl_result->fetch_all(MYSQLI_ASSOC);
-
+      $stmt = $conn->prepare("
+    SELECT * FROM students
+    WHERE course_enrolled = ?
+    AND school_year = ?
+    AND accommodation_type = 'extended_100'
+    ORDER BY last_name ASC, first_name ASC
+");
+      $stmt->bind_param("ss", $course, $school_year);
+      $stmt->execute();
+      $dbl_students = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
       // ----------------------------------------
       // Combine main location students
       // Preferential first, then no accommodations
@@ -139,23 +124,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
       shuffle($none_ids);
 
       // Assign seats: preferential first (1, 2, 3...) then random for rest
+
+      // Main location seats
+      $stmt = $conn->prepare("
+    UPDATE students 
+    SET seat_number = ?, assigned_location = ?
+    WHERE id = ?
+");
+
       $seat = 1;
       foreach ($pref_ids as $id) {
-        $loc_escaped = $conn->real_escape_string($main_location);
-        $conn->query("
-        UPDATE students 
-        SET seat_number = $seat, assigned_location = '$loc_escaped'
-        WHERE id = $id
-    ");
+        $stmt->bind_param("isi", $seat, $main_location, $id);
+        $stmt->execute();
         $seat++;
       }
       foreach ($none_ids as $id) {
-        $loc_escaped = $conn->real_escape_string($main_location);
-        $conn->query("
-        UPDATE students 
-        SET seat_number = $seat, assigned_location = '$loc_escaped'
-        WHERE id = $id
-    ");
+        $stmt->bind_param("isi", $seat, $main_location, $id);
+        $stmt->execute();
         $seat++;
       }
 
@@ -164,12 +149,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
       shuffle($overflow_ids);
       $seat = 1;
       foreach ($overflow_ids as $id) {
-        $loc_escaped = $conn->real_escape_string($overflow_location);
-        $conn->query("
-        UPDATE students 
-        SET seat_number = $seat, assigned_location = '$loc_escaped'
-        WHERE id = $id
-    ");
+        $stmt->bind_param("isi", $seat, $overflow_location, $id);
+        $stmt->execute();
         $seat++;
       }
 
@@ -178,27 +159,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
       shuffle($acc_ids);
       $seat = 1;
       foreach ($acc_ids as $id) {
-        $loc_escaped = $conn->real_escape_string($acc_location);
-        $conn->query("
-        UPDATE students 
-        SET seat_number = $seat, assigned_location = '$loc_escaped'
-        WHERE id = $id
-    ");
+        $stmt->bind_param("isi", $seat, $acc_location, $id);
+        $stmt->execute();
         $seat++;
       }
 
       // Guidance seats — random
       $dbl_ids = array_column($dbl_students, 'id');
       shuffle($dbl_ids);
+      $guidance = 'Guidance';
       $seat = 1;
       foreach ($dbl_ids as $id) {
-        $conn->query("
-        UPDATE students 
-        SET seat_number = $seat, assigned_location = 'Guidance'
-        WHERE id = $id
-    ");
+        $stmt->bind_param("isi", $seat, $guidance, $id);
+        $stmt->execute();
         $seat++;
       }
+       $charts_generated++;
     }
 
     $success_message = "Seating charts generated for $charts_generated AP test(s)!";
@@ -208,14 +184,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
   // Download seating chart for a specific test
   // ----------------------------------------
   if ($_POST['action'] === 'download_seating') {
-    $test_name = $conn->real_escape_string($_POST['test_name']);
+    $test_name = sanitize_string($_POST['test_name']);
 
-    // Fetch test info
-    $test_info = $conn->query("
-            SELECT * FROM ap_tests 
-            WHERE test_name = '$test_name' 
-            LIMIT 1
-        ")->fetch_assoc();
+    $stmt = $conn->prepare("
+    SELECT * FROM ap_tests 
+    WHERE test_name = ? 
+    LIMIT 1
+");
+    $stmt->bind_param("s", $test_name);
+    $stmt->execute();
+    $test_info = $stmt->get_result()->fetch_assoc();
 
     if (!$test_info) {
       $error_message = "Test not found.";
@@ -254,15 +232,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
       // Fetch students by location ordered by seat number
       $fetchStudents = function ($location) use ($conn, $test_name, $school_year) {
-        $loc_escaped = $conn->real_escape_string($location);
-        $tn_escaped = $conn->real_escape_string($test_name);
-        return $conn->query("
-                    SELECT * FROM students
-                    WHERE course_enrolled = '$tn_escaped'
-                    AND school_year = '$school_year'
-                    AND assigned_location = '$loc_escaped'
-                    ORDER BY seat_number ASC
-                ")->fetch_all(MYSQLI_ASSOC);
+        $stmt = $conn->prepare("
+        SELECT * FROM students
+        WHERE course_enrolled = ?
+        AND school_year = ?
+        AND assigned_location = ?
+        ORDER BY seat_number ASC
+    ");
+        $stmt->bind_param("sss", $test_name, $school_year, $location);
+        $stmt->execute();
+        return $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
       };
 
       $main_students = $fetchStudents($main_location);
@@ -343,15 +322,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
       }
 
       // Late testers (no seat number, class_section_type = late)
-      $late_result = $conn->query("
-                SELECT * FROM students
-                WHERE course_enrolled = '$test_name'
-                AND school_year = '$school_year'
-                AND (class_section_type LIKE '%late%' 
-                     OR class_section_type LIKE '%Late%')
-                ORDER BY last_name ASC
-            ");
-      $late_students = $late_result->fetch_all(MYSQLI_ASSOC);
+      $stmt = $conn->prepare("
+    SELECT * FROM students
+    WHERE course_enrolled = ?
+    AND school_year = ?
+    AND (class_section_type LIKE '%late%' 
+         OR class_section_type LIKE '%Late%')
+    ORDER BY last_name ASC
+");
+      $stmt->bind_param("ss", $test_name, $school_year);
+      $stmt->execute();
+      $late_students = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
 
       if (!empty($late_students)) {
         fputcsv($output, ['Late Testers', '', '', '', '']);
