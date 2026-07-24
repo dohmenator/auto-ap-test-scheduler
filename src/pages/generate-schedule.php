@@ -102,11 +102,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     $stmt->bind_param("s", $school_year);
     $stmt->execute();
 
-    $period = $conn->query("
-            SELECT * FROM testing_period 
-            WHERE school_year = '$school_year' 
-            LIMIT 1
-        ")->fetch_assoc();
+    // Line 105 - testing period query
+    $stmt = $conn->prepare("
+    SELECT * FROM testing_period 
+    WHERE school_year = ? 
+    LIMIT 1
+");
+    $stmt->bind_param("s", $school_year);
+    $stmt->execute();
+    $period = $stmt->get_result()->fetch_assoc();
 
     if (!$period) {
       $error_message = "Please set up the testing period first.";
@@ -114,40 +118,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
       $period_start = $period['period_start'];
       $period_end = $period['period_end'];
       $testing_dates = getTestingDates($period_start, $period_end);
-
       $first_4_days = array_slice($testing_dates, 0, 4);
       $last_4_days = array_slice($testing_dates, -4, 4);
 
+      // Line 121 - ap_tests query (no user input - safe as is)
       $tests_result = $conn->query("
-                SELECT * FROM ap_tests 
-                WHERE test_date IS NOT NULL 
-                AND test_time IS NOT NULL
-                ORDER BY test_date ASC, 
-                CASE test_time WHEN '8AM' THEN 1 WHEN '12PM' THEN 2 END ASC
-            ");
+        SELECT * FROM ap_tests 
+        WHERE test_date IS NOT NULL 
+        AND test_time IS NOT NULL
+        ORDER BY test_date ASC, 
+        CASE test_time WHEN '8AM' THEN 1 WHEN '12PM' THEN 2 END ASC
+    ");
       $tests = $tests_result->fetch_all(MYSQLI_ASSOC);
 
+      // Line 130 - teachers query (no user input - safe as is)
       $teachers_result = $conn->query("
-                SELECT t.*, a.test_date as their_test_date, 
-                       a.test_time as their_test_time,
-                       a.is_last_3_days, a.testing_day_number
-                FROM ap_teachers t
-                JOIN ap_tests a ON t.test_name = a.test_name
-                WHERE t.active = 1
-                ORDER BY t.teacher_name ASC
-            ");
+        SELECT t.*, a.test_date as their_test_date, 
+               a.test_time as their_test_time,
+               a.is_last_3_days, a.testing_day_number
+        FROM ap_teachers t
+        JOIN ap_tests a ON t.test_name = a.test_name
+        WHERE t.active = 1
+        ORDER BY t.teacher_name ASC
+    ");
       $teachers = $teachers_result->fetch_all(MYSQLI_ASSOC);
 
-      $counts_result = $conn->query("
-                SELECT course_enrolled, COUNT(*) as student_count
-                FROM students
-                WHERE school_year = '$school_year'
-                GROUP BY course_enrolled
-            ");
+      // Line 141 - student counts query
+      $stmt = $conn->prepare("
+        SELECT course_enrolled, COUNT(*) as student_count
+        FROM students
+        WHERE school_year = ?
+        GROUP BY course_enrolled
+    ");
+      $stmt->bind_param("s", $school_year);
+      $stmt->execute();
+      $counts_result = $stmt->get_result();
       $student_counts = [];
       while ($row = $counts_result->fetch_assoc()) {
         $student_counts[$row['course_enrolled']] = $row['student_count'];
       }
+
 
       $assignments = [];
       $teacher_assignment_counts = [];
@@ -714,15 +724,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
   // Download by Date CSV
   // ----------------------------------------
   if ($_POST['action'] === 'download_by_date') {
-    $result = $conn->query("
-            SELECT test_date, test_name, testing_day_number,
-                   GROUP_CONCAT(teacher_name ORDER BY teacher_name SEPARATOR ', ') 
-                   as proctors, location
-            FROM proctor_assignments
-            WHERE school_year = '$school_year'
-            GROUP BY test_date, test_name, testing_day_number, location
-            ORDER BY test_date ASC, test_name ASC
-        ");
+    $stmt = $conn->prepare("
+    SELECT test_date, test_name, testing_day_number,
+           GROUP_CONCAT(teacher_name ORDER BY teacher_name SEPARATOR ', ') 
+           as proctors, location
+    FROM proctor_assignments
+    WHERE school_year = ?
+    GROUP BY test_date, test_name, testing_day_number, location
+    ORDER BY test_date ASC, test_name ASC
+");
+    $stmt->bind_param("s", $school_year);
+    $stmt->execute();
+    $result = $stmt->get_result();
 
     header('Content-Type: text/csv');
     header('Content-Disposition: attachment; filename="proctor_schedule_by_date_' .
@@ -748,18 +761,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
   // Download by Teacher CSV
   // ----------------------------------------
   if ($_POST['action'] === 'download_by_teacher') {
-    $result = $conn->query("
-            SELECT teacher_name,
-                   GROUP_CONCAT(
-                       CONCAT(test_name, ' (', test_date, ')') 
-                       ORDER BY test_date SEPARATOR '; '
-                   ) as assignments,
-                   COUNT(*) as total_assignments
-            FROM proctor_assignments
-            WHERE school_year = '$school_year'
-            GROUP BY teacher_name
-            ORDER BY teacher_name ASC
-        ");
+    $stmt = $conn->prepare("
+    SELECT teacher_name,
+           GROUP_CONCAT(
+               CONCAT(test_name, ' (', test_date, ')') 
+               ORDER BY test_date SEPARATOR '; '
+           ) as assignments,
+           COUNT(*) as total_assignments
+    FROM proctor_assignments
+    WHERE school_year = ?
+    GROUP BY teacher_name
+    ORDER BY teacher_name ASC
+");
+    $stmt->bind_param("s", $school_year);
+    $stmt->execute();
+    $result = $stmt->get_result();
 
     header('Content-Type: text/csv');
     header('Content-Disposition: attachment; filename="proctor_schedule_by_teacher_' .
@@ -835,27 +851,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     }
 
     if ($override_type === 'replace') {
-      if (!empty($_POST['override_location'])) {
-        // Only remove assignment for this specific location
-        $conn->query("
-            DELETE FROM proctor_assignments
-            WHERE test_name = '$test_name'
-            AND test_date = '$test_date'
-            AND school_year = '$school_year'
-            AND location = '$location'
-        ");
-      } else {
-        // Remove all main location assignments for this test/date
-        $stmt = $conn->prepare("
-    DELETE FROM proctor_assignments
-    WHERE test_name = ?
-    AND test_date = ?
-    AND school_year = ?
-    AND location = ?
-");
-        $stmt->bind_param("ssss", $test_name, $test_date, $school_year, $location);
-        $stmt->execute();
-      }
+      // Only remove assignment for this specific location
+      $stmt = $conn->prepare("
+        DELETE FROM proctor_assignments
+        WHERE test_name = ?
+        AND test_date = ?
+        AND school_year = ?
+        AND location = ?
+    ");
+      $stmt->bind_param("ssss", $test_name, $test_date, $school_year, $location);
+      $stmt->execute();
     }
 
     // Insert new assignment
@@ -923,7 +928,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 // ------------------------------------------------
 
 // First get all tests with their main session info
-$all_tests_result = $conn->query("
+$stmt = $conn->prepare("
     SELECT 
         a.test_date,
         a.test_time,
@@ -934,18 +939,18 @@ $all_tests_result = $conn->query("
         a.overflow_location,
         (SELECT COUNT(*) FROM students s 
          WHERE s.course_enrolled = a.test_name 
-         AND s.school_year = '$school_year') as total_students,
+         AND s.school_year = ?) as total_students,
         (SELECT COUNT(*) FROM students s 
          WHERE s.course_enrolled = a.test_name 
-         AND s.school_year = '$school_year'
+         AND s.school_year = ?
          AND s.accommodation_type IN ('none','preferential_only')) as main_students,
         (SELECT COUNT(*) FROM students s 
          WHERE s.course_enrolled = a.test_name 
-         AND s.school_year = '$school_year'
+         AND s.school_year = ?
          AND s.accommodation_type IN ('extended_50','other')) as acc_students,
         (SELECT COUNT(*) FROM students s 
          WHERE s.course_enrolled = a.test_name 
-         AND s.school_year = '$school_year'
+         AND s.school_year = ?
          AND s.accommodation_type = 'extended_100') as guidance_students
     FROM ap_tests a
     WHERE a.test_date IS NOT NULL
@@ -953,7 +958,10 @@ $all_tests_result = $conn->query("
     ORDER BY a.test_date ASC,
     CASE a.test_time WHEN '8AM' THEN 1 WHEN '12PM' THEN 2 END ASC,
     a.test_name ASC
-")->fetch_all(MYSQLI_ASSOC);
+");
+$stmt->bind_param("ssss", $school_year, $school_year, $school_year, $school_year);
+$stmt->execute();
+$all_tests_result = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
 
 // For each test build location rows with proctor info
 $schedule_by_date = [];
@@ -1053,7 +1061,8 @@ foreach ($all_tests_result as $test) {
 
 
 
-$schedule_by_teacher = $conn->query("
+// Schedule by teacher
+$stmt = $conn->prepare("
     SELECT teacher_name,
            GROUP_CONCAT(
                CONCAT(test_name, ' on ', DATE_FORMAT(test_date, '%b %e')) 
@@ -1061,126 +1070,146 @@ $schedule_by_teacher = $conn->query("
            ) as assignments,
            COUNT(*) as total_assignments
     FROM proctor_assignments
-    WHERE school_year = '$school_year'
+    WHERE school_year = ?
     GROUP BY teacher_name
     ORDER BY teacher_name ASC
-")->fetch_all(MYSQLI_ASSOC);
+");
+$stmt->bind_param("s", $school_year);
+$stmt->execute();
+$schedule_by_teacher = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
 
-$multi_proctor_teachers = $conn->query("
+// Multi proctor teachers
+$stmt = $conn->prepare("
     SELECT teacher_name, COUNT(*) as assignment_count
     FROM proctor_assignments
-    WHERE school_year = '$school_year'
+    WHERE school_year = ?
     GROUP BY teacher_name
     HAVING COUNT(*) > 1
     ORDER BY COUNT(*) DESC
-")->fetch_all(MYSQLI_ASSOC);
+");
+$stmt->bind_param("s", $school_year);
+$stmt->execute();
+$multi_proctor_teachers = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
 
-$unassigned_check = $conn->query("
+// Unassigned check
+$stmt = $conn->prepare("
     SELECT a.test_name, a.test_date, a.test_time,
            COUNT(p.id) as assigned_count
     FROM ap_tests a
     LEFT JOIN proctor_assignments p ON a.test_name = p.test_name 
-        AND p.school_year = '$school_year'
+        AND p.school_year = ?
     WHERE a.test_date IS NOT NULL
     GROUP BY a.test_name, a.test_date, a.test_time
     HAVING assigned_count = 0
     ORDER BY a.test_date ASC
-")->fetch_all(MYSQLI_ASSOC);
+");
+$stmt->bind_param("s", $school_year);
+$stmt->execute();
+$unassigned_check = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
 
-// Fetch teachers with no assignments for persistent display
-$no_assignment_teachers = $conn->query("
+// Teachers with no assignments
+$stmt = $conn->prepare("
     SELECT t.teacher_name, t.test_name
     FROM ap_teachers t
     WHERE t.active = 1
     AND t.teacher_name NOT IN (
         SELECT DISTINCT teacher_name 
         FROM proctor_assignments 
-        WHERE school_year = '$school_year'
+        WHERE school_year = ?
     )
     ORDER BY t.teacher_name ASC
-")->fetch_all(MYSQLI_ASSOC);
+");
+$stmt->bind_param("s", $school_year);
+$stmt->execute();
+$no_assignment_teachers = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
 
-// Fetch all active teachers for override dropdowns
-// Unassigned teachers first, then everyone else
-$all_teachers_result = $conn->query("
+// All teachers for override dropdowns
+$stmt = $conn->prepare("
     SELECT t.teacher_name, t.test_name,
         COUNT(p.id) as assignment_count,
         CASE WHEN COUNT(p.id) = 0 THEN 0 ELSE 1 END as is_assigned
     FROM ap_teachers t
     LEFT JOIN proctor_assignments p ON t.teacher_name = p.teacher_name
-        AND p.school_year = '$school_year'
+        AND p.school_year = ?
     WHERE t.active = 1
     GROUP BY t.teacher_name, t.test_name
     ORDER BY assignment_count ASC, t.teacher_name ASC
 ");
-$all_teachers = $all_teachers_result->fetch_all(MYSQLI_ASSOC);
-
+$stmt->bind_param("s", $school_year);
+$stmt->execute();
+$all_teachers = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
 
 // ------------------------------------------------
 // Fetch accommodations/overflow/guidance sessions
 // with their proctor status
 // ------------------------------------------------
-$acc_proctor_sessions = $conn->query("
+$stmt = $conn->prepare("
     SELECT 
         t.test_name,
         t.test_date,
         t.test_time,
         t.accommodations_location,
         t.overflow_location,
-        -- Accommodations room student count
         (SELECT COUNT(*) FROM students s 
          WHERE s.course_enrolled = t.test_name 
-         AND s.school_year = '$school_year'
+         AND s.school_year = ?
          AND s.accommodation_type IN ('extended_50','other')) as acc_count,
-        -- Guidance student count
         (SELECT COUNT(*) FROM students s 
          WHERE s.course_enrolled = t.test_name 
-         AND s.school_year = '$school_year'
+         AND s.school_year = ?
          AND s.accommodation_type = 'extended_100') as guidance_count,
-        -- Overflow student count
         GREATEST(0, (SELECT COUNT(*) FROM students s 
          WHERE s.course_enrolled = t.test_name 
-         AND s.school_year = '$school_year'
+         AND s.school_year = ?
          AND s.accommodation_type IN ('none','preferential_only')) - 175) as overflow_count,
-        -- Accommodations room proctor
         (SELECT GROUP_CONCAT(p.teacher_name SEPARATOR ', ')
          FROM proctor_assignments p
          WHERE p.test_name = t.test_name
-         AND p.school_year = '$school_year'
+         AND p.school_year = ?
          AND p.location = t.accommodations_location
          LIMIT 1) as acc_proctor,
-        -- Guidance proctor
         (SELECT GROUP_CONCAT(p.teacher_name SEPARATOR ', ')
          FROM proctor_assignments p
          WHERE p.test_name = t.test_name
-         AND p.school_year = '$school_year'
+         AND p.school_year = ?
          AND p.location = 'Guidance'
          LIMIT 1) as guidance_proctor,
-        -- Overflow proctor
         (SELECT GROUP_CONCAT(p.teacher_name SEPARATOR ', ')
          FROM proctor_assignments p
          WHERE p.test_name = t.test_name
-         AND p.school_year = '$school_year'
+         AND p.school_year = ?
          AND p.location = t.overflow_location
          LIMIT 1) as overflow_proctor
     FROM ap_tests t
     WHERE t.test_date IS NOT NULL
     HAVING acc_count > 0 OR guidance_count > 0 OR overflow_count > 0
     ORDER BY t.test_date ASC, t.test_name ASC
-")->fetch_all(MYSQLI_ASSOC);
+");
+$stmt->bind_param(
+  "ssssss",
+  $school_year,
+  $school_year,
+  $school_year,
+  $school_year,
+  $school_year,
+  $school_year
+);
+$stmt->execute();
+$acc_proctor_sessions = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
 
-// Fetch teachers grouped for accommodations dropdown
-$acc_teachers_result = $conn->query("
+$stmt = $conn->prepare("
     SELECT t.teacher_name, t.test_name,
         COUNT(p.id) as assignment_count
     FROM ap_teachers t
     LEFT JOIN proctor_assignments p ON t.teacher_name = p.teacher_name
-        AND p.school_year = '$school_year'
+        AND p.school_year = ?
     WHERE t.active = 1
     GROUP BY t.teacher_name, t.test_name
     ORDER BY assignment_count ASC, t.teacher_name ASC
 ");
-$acc_teachers = $acc_teachers_result->fetch_all(MYSQLI_ASSOC);
+$stmt->bind_param("s", $school_year);
+$stmt->execute();
+$acc_teachers = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
 
 ?>
 <!DOCTYPE html>
