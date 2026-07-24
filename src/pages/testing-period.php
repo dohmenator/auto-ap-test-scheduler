@@ -84,11 +84,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
       // Skip empty dates
       if (empty($test_date)) {
-        $sql = "UPDATE ap_tests SET 
-                            test_date = NULL,
-                            test_time = NULL
-                        WHERE id = $test_id";
-        $conn->query($sql);
+        $stmt = $conn->prepare("
+        UPDATE ap_tests SET 
+            test_date = NULL,
+            test_time = NULL
+        WHERE id = ?
+    ");
+        $stmt->bind_param("i", $test_id);
+        $stmt->execute();
         continue;
       }
 
@@ -102,8 +105,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
       // Validate year is reasonable (between 2020 and 2040)
       $year = (int)$parsed_date->format('Y');
       if ($year < 2020 || $year > 2040) {
-        $test_name_result = $conn->query("SELECT test_name FROM ap_tests WHERE id = $test_id");
-        $test_name_row = $test_name_result->fetch_assoc();
+        $stmt = $conn->prepare("SELECT test_name FROM ap_tests WHERE id = ?");
+        $stmt->bind_param("i", $test_id);
+        $stmt->execute();
+        $test_name_row = $stmt->get_result()->fetch_assoc();
         $errors[] = "Invalid year '$year' detected for '{$test_name_row['test_name']}'. Please check your dates.";
         continue;
       }
@@ -115,8 +120,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $end_timestamp = strtotime($period_end);
 
         if ($test_timestamp < $start_timestamp || $test_timestamp > ($end_timestamp + 86400 - 1)) {
-          $test_name_result = $conn->query("SELECT test_name FROM ap_tests WHERE id = $test_id");
-          $test_name_row = $test_name_result->fetch_assoc();
+          $stmt = $conn->prepare("SELECT test_name FROM ap_tests WHERE id = ?");
+          $stmt->bind_param("i", $test_id);
+          $stmt->execute();
+          $test_name_row = $stmt->get_result()->fetch_assoc();
           // Save it anyway even though it's outside the window
 
           $stmt = $conn->prepare("
@@ -142,22 +149,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     }
 
     // Recalculate day numbers if testing period exists
-    $period = $conn->query("SELECT * FROM testing_period WHERE school_year = '$school_year' LIMIT 1")->fetch_assoc();
+    $stmt = $conn->prepare("
+    SELECT * FROM testing_period 
+    WHERE school_year = ? 
+    LIMIT 1
+");
+    $stmt->bind_param("s", $school_year);
+    $stmt->execute();
+    $period = $stmt->get_result()->fetch_assoc();
+
     if ($period) {
       $period_start = $period['period_start'];
       $period_end = $period['period_end'];
-      $conn->query("UPDATE ap_tests SET 
-      testing_day_number = CASE 
-          WHEN DATEDIFF(test_date, '$period_start') + 1 BETWEEN 1 AND 127 
-          THEN DATEDIFF(test_date, '$period_start') + 1
-          ELSE NULL
-      END,  
-      is_last_3_days = CASE 
-          WHEN DATEDIFF('$period_end', test_date) < 4 
-          AND DATEDIFF('$period_end', test_date) >= 0 THEN 1 
-          ELSE 0 
-      END
-      WHERE test_date IS NOT NULL");
+
+      $stmt = $conn->prepare("
+        UPDATE ap_tests SET 
+        testing_day_number = CASE 
+            WHEN DATEDIFF(test_date, ?) + 1 BETWEEN 1 AND 127 
+            THEN DATEDIFF(test_date, ?) + 1
+            ELSE NULL
+        END,  
+        is_last_3_days = CASE 
+            WHEN DATEDIFF(?, test_date) < 4 
+            AND DATEDIFF(?, test_date) >= 0 THEN 1 
+            ELSE 0 
+        END
+        WHERE test_date IS NOT NULL
+    ");
+      $stmt->bind_param(
+        "ssss",
+        $period_start,
+        $period_start,
+        $period_end,
+        $period_end
+      );
+      $stmt->execute();
     }
 
     if (empty($errors)) {
@@ -178,7 +204,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 // ------------------------------------------------
 // Fetch current testing period
 // ------------------------------------------------
-$period_result = $conn->query("SELECT * FROM testing_period WHERE school_year = '$school_year' LIMIT 1");
+$stmt = $conn->prepare("SELECT * FROM testing_period WHERE school_year = ? LIMIT 1");
+$stmt->bind_param("s", $school_year);
+$stmt->execute();
+$period_result = $stmt->get_result();
 $period = $period_result->fetch_assoc();
 
 // ------------------------------------------------

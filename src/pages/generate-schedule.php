@@ -49,17 +49,16 @@ function resolveSessionRoom(
 ) {
 
   // Check for coordinator override first
-  $test_name_escaped = $conn->real_escape_string($test_name);
-  $test_date_escaped = $conn->real_escape_string($test_date);
-  $test_time_escaped = $conn->real_escape_string($test_time);
-
-  $override = $conn->query("
-        SELECT main_location FROM test_room_overrides
-        WHERE test_name = '$test_name_escaped'
-        AND session_date = '$test_date_escaped'
-        AND session_time = '$test_time_escaped'
-        LIMIT 1
-    ")->fetch_assoc();
+  $stmt = $conn->prepare("
+    SELECT main_location FROM test_room_overrides
+    WHERE test_name = ?
+    AND session_date = ?
+    AND session_time = ?
+    LIMIT 1
+");
+  $stmt->bind_param("sss", $test_name, $test_date, $test_time);
+  $stmt->execute();
+  $override = $stmt->get_result()->fetch_assoc();
 
   if ($override) {
     return $override['main_location'];
@@ -99,7 +98,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
   // ----------------------------------------
   if ($_POST['action'] === 'generate_schedule') {
 
-    $conn->query("DELETE FROM proctor_assignments WHERE school_year = '$school_year'");
+    $stmt = $conn->prepare("DELETE FROM proctor_assignments WHERE school_year = ?");
+    $stmt->bind_param("s", $school_year);
+    $stmt->execute();
 
     $period = $conn->query("
             SELECT * FROM testing_period 
@@ -223,21 +224,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
           $teacher = $eligible['teacher'];
           $teacher_name = $teacher['teacher_name'];
 
-          $teacher_name_escaped = $conn->real_escape_string($teacher_name);
-          $test_name_escaped = $conn->real_escape_string($test_name);
-          $test_date_escaped = $conn->real_escape_string($test_date);
-          $resolved_room_escaped = $conn->real_escape_string($resolved_room);
-          $day_number = $test['testing_day_number'];
+          $stmt = $conn->prepare("
+    INSERT INTO proctor_assignments
+        (teacher_name, test_name, test_date, testing_day_number, 
+         location, school_year)
+    VALUES (?, ?, ?, ?, ?, ?)
+");
+          $stmt->bind_param(
+            "sssiss",
+            $teacher_name,
+            $test_name,
+            $test_date,
+            $day_number,
+            $resolved_room,
+            $school_year
+          );
 
-          $sql = "INSERT INTO proctor_assignments 
-            (teacher_name, test_name, test_date, testing_day_number, 
-             location, school_year)
-            VALUES 
-            ('$teacher_name_escaped', '$test_name_escaped', 
-             '$test_date_escaped', " . ($day_number !== NULL ? $day_number : 'NULL') . ",
-             '$resolved_room_escaped', '$school_year')";
-
-          if ($conn->query($sql)) {
+          if ($stmt->execute()) {
             $assignments[] = [
               'teacher_name' => $teacher_name,
               'test_name' => $test_name,
@@ -356,21 +359,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
           $teacher = $eligible['teacher'];
           $teacher_name = $teacher['teacher_name'];
 
-          $teacher_name_escaped = $conn->real_escape_string($teacher_name);
-          $test_name_escaped = $conn->real_escape_string($test_name);
-          $test_date_escaped = $conn->real_escape_string($test_date);
-          $resolved_room_escaped = $conn->real_escape_string($resolved_room);
-          $day_number = $test['testing_day_number'];
+          $stmt = $conn->prepare("
+    INSERT INTO proctor_assignments
+        (teacher_name, test_name, test_date, testing_day_number, 
+         location, school_year)
+    VALUES (?, ?, ?, ?, ?, ?)
+");
+          $stmt->bind_param(
+            "sssiss",
+            $teacher_name,
+            $test_name,
+            $test_date,
+            $day_number,
+            $resolved_room,
+            $school_year
+          );
 
-          $sql = "INSERT INTO proctor_assignments 
-            (teacher_name, test_name, test_date, testing_day_number, 
-             location, school_year)
-            VALUES 
-            ('$teacher_name_escaped', '$test_name_escaped', 
-             '$test_date_escaped', " . ($day_number !== NULL ? $day_number : 'NULL') . ",
-             '$resolved_room_escaped', '$school_year')";
-
-          if ($conn->query($sql)) {
+          if ($stmt->execute()) {
             $assignments[] = [
               'teacher_name' => $teacher_name,
               'test_name' => $test_name,
@@ -467,21 +472,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $slot_rooms_used[$slot_key][] = $resolved_room;
           }
 
-          $teacher_name_escaped = $conn->real_escape_string($teacher_name);
-          $test_name_escaped = $conn->real_escape_string($test_name);
-          $test_date_escaped = $conn->real_escape_string($test_date);
-          $resolved_room_escaped = $conn->real_escape_string($resolved_room);
-          $day_number = !empty($test['testing_day_number']) ? (int)$test['testing_day_number'] : NULL;
+          $stmt = $conn->prepare("
+    INSERT INTO proctor_assignments
+        (teacher_name, test_name, test_date, testing_day_number, 
+         location, school_year)
+    VALUES (?, ?, ?, ?, ?, ?)
+");
+          $stmt->bind_param(
+            "sssiss",
+            $teacher_name,
+            $test_name,
+            $test_date,
+            $day_number,
+            $resolved_room,
+            $school_year
+          );
 
-          $sql = "INSERT INTO proctor_assignments 
-            (teacher_name, test_name, test_date, testing_day_number, 
-             location, school_year)
-            VALUES 
-            ('$teacher_name_escaped', '$test_name_escaped', 
-             '$test_date_escaped', " . ($day_number !== NULL ? $day_number : 'NULL') . ",
-             '$resolved_room_escaped', '$school_year')";
-
-          if ($conn->query($sql)) {
+          if ($stmt->execute()) {
             $assignments[] = [
               'teacher_name' => $teacher_name,
               'test_name' => $test_name,
@@ -515,28 +522,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $overflow_location = $test['overflow_location'] ?? 'Media Center';
 
         // Check if this test has students in accommodations room
-        $test_name_escaped = $conn->real_escape_string($test_name);
+        $stmt = $conn->prepare("
+    SELECT COUNT(*) as cnt FROM students
+    WHERE course_enrolled = ?
+    AND school_year = ?
+    AND accommodation_type IN ('extended_50', 'other')
+");
+        $stmt->bind_param("ss", $test_name, $school_year);
+        $stmt->execute();
+        $acc_count = $stmt->get_result()->fetch_assoc()['cnt'];
 
-        $acc_count = $conn->query("
-        SELECT COUNT(*) as cnt FROM students
-        WHERE course_enrolled = '$test_name_escaped'
-        AND school_year = '$school_year'
-        AND accommodation_type IN ('extended_50', 'other')
-    ")->fetch_assoc()['cnt'];
+        $stmt = $conn->prepare("
+    SELECT COUNT(*) as cnt FROM students
+    WHERE course_enrolled = ?
+    AND school_year = ?
+    AND accommodation_type = 'extended_100'
+");
+        $stmt->bind_param("ss", $test_name, $school_year);
+        $stmt->execute();
+        $guidance_count = $stmt->get_result()->fetch_assoc()['cnt'];
 
-        $guidance_count = $conn->query("
-        SELECT COUNT(*) as cnt FROM students
-        WHERE course_enrolled = '$test_name_escaped'
-        AND school_year = '$school_year'
-        AND accommodation_type = 'extended_100'
-    ")->fetch_assoc()['cnt'];
-
-        $main_count = $conn->query("
-        SELECT COUNT(*) as cnt FROM students
-        WHERE course_enrolled = '$test_name_escaped'
-        AND school_year = '$school_year'
-        AND accommodation_type IN ('none', 'preferential_only')
-    ")->fetch_assoc()['cnt'];
+        $stmt = $conn->prepare("
+    SELECT COUNT(*) as cnt FROM students
+    WHERE course_enrolled = ?
+    AND school_year = ?
+    AND accommodation_type IN ('none', 'preferential_only')
+");
+        $stmt->bind_param("ss", $test_name, $school_year);
+        $stmt->execute();
+        $main_count = $stmt->get_result()->fetch_assoc()['cnt'];
 
         $overflow_count = max(0, $main_count - 175);
 
@@ -578,18 +592,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $location = $session['location'];
 
         // Check if already has a proctor
-        $test_name_escaped = $conn->real_escape_string($test_name);
-        $location_escaped = $conn->real_escape_string($location);
-        $test_date_escaped = $conn->real_escape_string($test_date);
-
-        $existing = $conn->query("
-        SELECT id FROM proctor_assignments
-        WHERE test_name = '$test_name_escaped'
-        AND test_date = '$test_date_escaped'
-        AND location = '$location_escaped'
-        AND school_year = '$school_year'
-        LIMIT 1
-    ")->fetch_assoc();
+        $stmt = $conn->prepare("
+    SELECT id FROM proctor_assignments
+    WHERE test_name = ?
+    AND test_date = ?
+    AND location = ?
+    AND school_year = ?
+    LIMIT 1
+");
+        $stmt->bind_param("ssss", $test_name, $test_date, $location, $school_year);
+        $stmt->execute();
+        $existing = $stmt->get_result()->fetch_assoc();
 
         if ($existing) continue;
 
@@ -624,7 +637,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
           if (!$eligible) continue;
 
           // Assign this teacher
-          $teacher_name_escaped = $conn->real_escape_string($teacher_name);
           $day_number = null;
           foreach ($tests as $t) {
             if ($t['test_name'] === $test_name) {
@@ -633,15 +645,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
           }
 
-          $sql = "INSERT INTO proctor_assignments
-            (teacher_name, test_name, test_date, testing_day_number,
-             location, school_year)
-            VALUES
-            ('$teacher_name_escaped', '$test_name_escaped',
-             '$test_date_escaped', " . ($day_number !== NULL ? $day_number : 'NULL') . ",
-             '$location_escaped', '$school_year')";
+          $stmt = $conn->prepare("
+    INSERT INTO proctor_assignments
+        (teacher_name, test_name, test_date, testing_day_number,
+         location, school_year)
+    VALUES (?, ?, ?, ?, ?, ?)
+");
+          $stmt->bind_param(
+            "sssiss",
+            $teacher_name,
+            $test_name,
+            $test_date,
+            $day_number,
+            $location,
+            $school_year
+          );
 
-          if ($conn->query($sql)) {
+          if ($stmt->execute()) {
             $teacher_assignment_counts[$teacher_name]++;
             $teacher_assigned_dates[$teacher_name][] = $test_date;
             $assigned = true;
@@ -763,7 +783,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
   // Clear Schedule
   // ----------------------------------------
   if ($_POST['action'] === 'clear_schedule') {
-    $conn->query("DELETE FROM proctor_assignments WHERE school_year = '$school_year'");
+    $stmt = $conn->prepare("DELETE FROM proctor_assignments WHERE school_year = ?");
+    $stmt->bind_param("s", $school_year);
+    $stmt->execute();
     $success_message = "Schedule cleared successfully.";
   }
 
@@ -772,34 +794,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
   // Override / Assign Proctor
   // ----------------------------------------
   if ($_POST['action'] === 'override_proctor') {
-    $test_name = $conn->real_escape_string($_POST['test_name']);
-    $test_date = $conn->real_escape_string($_POST['test_date']);
-    $new_teacher = $conn->real_escape_string($_POST['new_teacher']);
+    $test_name = sanitize_string($_POST['test_name']);
+    $test_date = sanitize_date($_POST['test_date']);
+    $new_teacher = sanitize_string($_POST['new_teacher']);
     $override_type = $_POST['override_type'] ?? 'replace';
 
     // Get testing day number for this test
-    $day_result = $conn->query("
-        SELECT testing_day_number, main_location 
-        FROM ap_tests 
-        WHERE test_name = '$test_name' 
-        LIMIT 1
-    ")->fetch_assoc();
+    $stmt = $conn->prepare("
+    SELECT testing_day_number, main_location 
+    FROM ap_tests 
+    WHERE test_name = ? 
+    LIMIT 1
+");
+    $stmt->bind_param("s", $test_name);
+    $stmt->execute();
+    $day_result = $stmt->get_result()->fetch_assoc();
 
     $day_number = $day_result['testing_day_number'] ?? null;
     $location = $day_result['main_location'] ?? 'Gym';
 
     // Use override_location if provided (for accommodations/guidance/overflow)
     if (!empty($_POST['override_location'])) {
-      $location = $conn->real_escape_string($_POST['override_location']);
+      $location = sanitize_string($_POST['override_location']);
     } else {
       // Get current location from existing assignment
-      $current = $conn->query("
-        SELECT location FROM proctor_assignments
-        WHERE test_name = '$test_name'
-        AND test_date = '$test_date'
-        AND school_year = '$school_year'
-        LIMIT 1
-    ")->fetch_assoc();
+      $stmt = $conn->prepare("
+    SELECT location FROM proctor_assignments
+    WHERE test_name = ?
+    AND test_date = ?
+    AND school_year = ?
+    LIMIT 1
+");
+      $stmt->bind_param("sss", $test_name, $test_date, $school_year);
+      $stmt->execute();
+      $current = $stmt->get_result()->fetch_assoc();
 
       if ($current) {
         $location = $current['location'];
@@ -818,42 +846,54 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         ");
       } else {
         // Remove all main location assignments for this test/date
-        $conn->query("
-            DELETE FROM proctor_assignments
-            WHERE test_name = '$test_name'
-            AND test_date = '$test_date'
-            AND school_year = '$school_year'
-            AND location = '$location'
-        ");
+        $stmt = $conn->prepare("
+    DELETE FROM proctor_assignments
+    WHERE test_name = ?
+    AND test_date = ?
+    AND school_year = ?
+    AND location = ?
+");
+        $stmt->bind_param("ssss", $test_name, $test_date, $school_year, $location);
+        $stmt->execute();
       }
     }
 
     // Insert new assignment
     // Check for duplicate before inserting
-    $dup_check = $conn->query("
+    $stmt = $conn->prepare("
     SELECT id FROM proctor_assignments
-    WHERE teacher_name = '$new_teacher'
-    AND test_name = '$test_name'
-    AND test_date = '$test_date'
-    AND school_year = '$school_year'
+    WHERE teacher_name = ?
+    AND test_name = ?
+    AND test_date = ?
+    AND school_year = ?
     LIMIT 1
 ");
+    $stmt->bind_param("ssss", $new_teacher, $test_name, $test_date, $school_year);
+    $stmt->execute();
+    $dup_check = $stmt->get_result();
 
     if ($dup_check->num_rows > 0) {
       $error_message = "This teacher is already assigned to this session.";
     } else {
-      $location_escaped = $conn->real_escape_string($location);
-      $sql = "INSERT INTO proctor_assignments
-                (teacher_name, test_name, test_date, testing_day_number,
-                 location, school_year)
-            VALUES
-                ('$new_teacher', '$test_name', '$test_date', '$day_number',
-                 '$location_escaped', '$school_year')";
-
-      if ($conn->query($sql)) {
+      $stmt = $conn->prepare("
+    INSERT INTO proctor_assignments
+        (teacher_name, test_name, test_date, testing_day_number,
+         location, school_year)
+    VALUES (?, ?, ?, ?, ?, ?)
+");
+      $stmt->bind_param(
+        "sssiss",
+        $new_teacher,
+        $test_name,
+        $test_date,
+        $day_number,
+        $location,
+        $school_year
+      );
+      if ($stmt->execute()) {
         $success_message = "Proctor assignment updated successfully!";
       } else {
-        $error_message = "Error updating assignment: " . $conn->error;
+        $error_message = "Error updating assignment: " . $stmt->error;
       }
     }
   }
@@ -863,7 +903,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
   // ----------------------------------------
   if ($_POST['action'] === 'remove_proctor') {
     $assignment_id = (int)$_POST['assignment_id'];
-    if ($conn->query("DELETE FROM proctor_assignments WHERE id = $assignment_id")) {
+    $stmt = $conn->prepare("DELETE FROM proctor_assignments WHERE id = ?");
+    $stmt->bind_param("i", $assignment_id);
+    if ($stmt->execute()) {
       $success_message = "Proctor removed successfully.";
     } else {
       $error_message = "Error removing proctor.";
@@ -916,19 +958,24 @@ $all_tests_result = $conn->query("
 // For each test build location rows with proctor info
 $schedule_by_date = [];
 foreach ($all_tests_result as $test) {
-  $test_name = $conn->real_escape_string($test['test_name']);
+
   $main_students = (int)$test['main_students'];
   $overflow_count = max(0, $main_students - 175);
   $main_count = min($main_students, 175);
 
   // Fetch all proctor assignments for this test
-  $proctors_result = $conn->query("
-        SELECT teacher_name, location
-        FROM proctor_assignments
-        WHERE test_name = '$test_name'
-        AND school_year = '$school_year'
-        ORDER BY id ASC
-    ");
+  $test_name = $test['test_name'];
+  $stmt = $conn->prepare("
+    SELECT teacher_name, location
+    FROM proctor_assignments
+    WHERE test_name = ?
+    AND school_year = ?
+    ORDER BY id ASC
+");
+  $stmt->bind_param("ss", $test_name, $school_year);
+  $stmt->execute();
+  $proctors_result = $stmt->get_result();
+
   $proctors_by_location = [];
   while ($p = $proctors_result->fetch_assoc()) {
     $loc = $p['location'];

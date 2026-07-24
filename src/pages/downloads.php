@@ -80,13 +80,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
     // Download individual seating chart
     if ($_POST['action'] === 'download_seating') {
-        $test_name = $conn->real_escape_string($_POST['test_name']);
+        $test_name = sanitize_string($_POST['test_name']);
 
-        $test_info = $conn->query("
-            SELECT * FROM ap_tests 
-            WHERE test_name = '$test_name' 
-            LIMIT 1
-        ")->fetch_assoc();
+        $stmt = $conn->prepare("
+    SELECT * FROM ap_tests 
+    WHERE test_name = ? 
+    LIMIT 1
+");
+        $stmt->bind_param("s", $test_name);
+        $stmt->execute();
+        $test_info = $stmt->get_result()->fetch_assoc();
 
         if ($test_info) {
             // Fetch proctors per location
@@ -115,17 +118,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 }
                 return 'TBD';
             };
-
             $fetchStudents = function ($location) use ($conn, $test_name, $school_year) {
-                $loc_escaped = $conn->real_escape_string($location);
-                $tn_escaped = $conn->real_escape_string($test_name);
-                return $conn->query("
-                    SELECT * FROM students
-                    WHERE course_enrolled = '$tn_escaped'
-                    AND school_year = '$school_year'
-                    AND assigned_location = '$loc_escaped'
-                    ORDER BY seat_number ASC
-                ")->fetch_all(MYSQLI_ASSOC);
+                $stmt = $conn->prepare("
+        SELECT * FROM students
+        WHERE course_enrolled = ?
+        AND school_year = ?
+        AND assigned_location = ?
+        ORDER BY seat_number ASC
+    ");
+                $stmt->bind_param("sss", $test_name, $school_year, $location);
+                $stmt->execute();
+                return $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
             };
 
             $main_location = $test_info['main_location'];
@@ -294,18 +297,21 @@ $all_tests_result = $conn->query("
 // Build schedule view
 $schedule_view = [];
 foreach ($all_tests_result as $test) {
-    $test_name = $conn->real_escape_string($test['test_name']);
+    $test_name = $test['test_name'];
     $main_students = (int)$test['main_students'];
     $overflow_count = max(0, $main_students - 175);
     $main_count = min($main_students, 175);
 
-    $proctors_result = $conn->query("
-        SELECT teacher_name, location
-        FROM proctor_assignments
-        WHERE test_name = '$test_name'
-        AND school_year = '$school_year'
-        ORDER BY id ASC
-    ");
+    $stmt = $conn->prepare("
+    SELECT teacher_name, location
+    FROM proctor_assignments
+    WHERE test_name = ?
+    AND school_year = ?
+    ORDER BY id ASC
+");
+    $stmt->bind_param("ss", $test_name, $school_year);
+    $stmt->execute();
+    $proctors_result = $stmt->get_result();
     $proctors_by_location = [];
     while ($p = $proctors_result->fetch_assoc()) {
         $loc = $p['location'];

@@ -9,5 +9,9 @@
     "vscode": {
       "extensions": ["ms-azuretools.vscode-docker"]
     }
-  }
+  },
+  "extensions": [
+  "bmewburn.vscode-intelephense-client"
+]
+
 }

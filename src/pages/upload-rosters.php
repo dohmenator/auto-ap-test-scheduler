@@ -269,7 +269,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
   // Clear all students for this school year
   if ($_POST['action'] === 'clear_roster') {
-    $conn->query("DELETE FROM students WHERE school_year = '$school_year'");
+    $stmt = $conn->prepare("DELETE FROM students WHERE school_year = ?");
+    $stmt->bind_param("s", $school_year);
+    $stmt->execute();
     $success_message = "All student rosters cleared for $school_year.";
   }
 }

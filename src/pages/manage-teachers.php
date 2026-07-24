@@ -147,7 +147,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     $new_active = $current_active ? 0 : 1;
 
     $sql = "UPDATE ap_teachers SET active = $new_active WHERE id = $teacher_id";
-    if ($conn->query($sql)) {
+    $stmt = $conn->prepare("UPDATE ap_teachers SET active = ? WHERE id = ?");
+    $stmt->bind_param("ii", $new_active, $teacher_id);
+    if ($stmt->execute()) {
       $success_message = $new_active
         ? "Teacher reactivated successfully!"
         : "Teacher deactivated successfully!";
@@ -159,8 +161,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
   // Delete teacher
   if ($_POST['action'] === 'delete_teacher') {
     $teacher_id = (int)$_POST['teacher_id'];
-    $sql = "DELETE FROM ap_teachers WHERE id = $teacher_id";
-    if ($conn->query($sql)) {
+    $stmt = $conn->prepare("DELETE FROM ap_teachers WHERE id = ?");
+    $stmt->bind_param("i", $teacher_id);
+    if ($stmt->execute()) {
       $success_message = "Teacher deleted successfully!";
     } else {
       $error_message = "Error deleting teacher.";
