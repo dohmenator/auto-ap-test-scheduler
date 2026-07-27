@@ -871,14 +871,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     AND test_name = ?
     AND test_date = ?
     AND school_year = ?
+    AND location != ?
     LIMIT 1
 ");
-    $stmt->bind_param("ssss", $new_teacher, $test_name, $test_date, $school_year);
+    $stmt->bind_param("sssss", $new_teacher, $test_name, $test_date, $school_year, $location);
     $stmt->execute();
     $dup_check = $stmt->get_result();
 
     if ($dup_check->num_rows > 0) {
-      $error_message = "This teacher is already assigned to this session.";
+      $error_message = "This teacher is already assigned to this session in a different location.";
     } else {
       $stmt = $conn->prepare("
     INSERT INTO proctor_assignments
@@ -1530,7 +1531,8 @@ $acc_teachers = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
                   <!-- Override Form Row -->
                   <tr id="<?php echo $override_id; ?>" class="override-form-row" style="display:none">
                     <td colspan="8" style="padding:0.75rem 1rem; background:#f0f7f0;">
-                      <form method="POST" style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap;">
+                      <form method="POST" id="form_<?php echo $override_id; ?>" style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap;">
+                        <?php echo csrf_input(); ?>
                         <input type="hidden" name="action" value="override_proctor" />
                         <input type="hidden" name="test_name"
                           value="<?php echo h($test['test_name'] ?? ''); ?>" />
@@ -1601,32 +1603,47 @@ $acc_teachers = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
 
                         <?php else: ?>
                           <!-- Accommodations/Guidance/Overflow — free text input with datalist -->
-                          <input type="text"
-                            name="new_teacher"
-                            list="teachers_list_<?php echo $override_id; ?>"
-                            placeholder="Type or select a name..."
-                            style="min-width:250px; padding:0.35rem 0.5rem; border-radius:4px; border:1px solid #ccc; font-size:0.85rem;"
-                            value="<?php echo h($loc_row['proctor'] ?? ''); ?>" />
-                          <datalist id="teachers_list_<?php echo $override_id; ?>">
-
-                            <?php
-                            $max_assignments = max(array_column($acc_teachers, 'assignment_count'));
-                            for ($i = 0; $i <= $max_assignments; $i++): ?>
-                              <option disabled>— <?php echo $i; ?> assignment<?php echo $i !== 1 ? 's' : ''; ?> —</option>
-                              <?php foreach ($acc_teachers as $t): ?>
-                                <?php if ($t['assignment_count'] == $i): ?>
-                                  <option value="<?php echo h($t['teacher_name']); ?>">
-                                    <?php echo h($t['teacher_name']); ?>
-                                    (teaches <?php echo h($t['test_name']); ?>) — <?php echo $i; ?> assignment<?php echo $i !== 1 ? 's' : ''; ?>
-                                  </option>
-                                <?php endif; ?>
-                              <?php endforeach; ?>
-                            <?php endfor; ?>
-
-                          </datalist>
-                          <small style="color:#666; font-style:italic;">
-                            You can type any name — not restricted to the list
-                          </small>
+                          <div style="display:flex; flex-direction:column; gap:0.4rem;">
+                            <select
+                              id="select_<?php echo $override_id; ?>"
+                              style="min-width:250px; padding:0.35rem 0.5rem; border-radius:4px; border:1px solid #ccc; font-size:0.85rem;"
+                              onchange="document.getElementById('teacher_<?php echo $override_id; ?>').value = this.value">
+                              <option value="">— Select from AP teachers —</option>
+                              <?php
+                              $max_assignments = !empty($acc_teachers)
+                                ? max(array_column($acc_teachers, 'assignment_count'))
+                                : 0;
+                              for ($i = 0; $i <= $max_assignments; $i++):
+                                $group_teachers = array_filter(
+                                  $acc_teachers,
+                                  fn($t) => $t['assignment_count'] == $i
+                                );
+                                if (empty($group_teachers)) continue;
+                              ?>
+                                <optgroup label="— <?php echo $i; ?> assignment<?php echo $i !== 1 ? 's' : ''; ?> —">
+                                  <?php foreach ($group_teachers as $t): ?>
+                                    <option value="<?php echo h($t['teacher_name']); ?>"
+                                      <?php echo ($loc_row['proctor'] ?? '') === $t['teacher_name'] ? 'selected' : ''; ?>>
+                                      <?php echo h($t['teacher_name']); ?>
+                                      (teaches <?php echo h($t['test_name']); ?>)
+                                    </option>
+                                  <?php endforeach; ?>
+                                </optgroup>
+                              <?php endfor; ?>
+                            </select>
+                            <div style="display:flex; align-items:center; gap:0.5rem;">
+                              <small style="color:#666;">Or type any name (e.g. guidance staff, substitute):</small>
+                              <input type="text"
+                                placeholder="Type custom name..."
+                                style="min-width:200px; padding:0.35rem 0.5rem; border-radius:4px; border:1px solid #ccc; font-size:0.85rem;"
+                                oninput="document.getElementById('teacher_<?php echo $override_id; ?>').value = this.value" />
+                            </div>
+                            <!-- Hidden input that actually gets submitted -->
+                            <input type="hidden"
+                              id="teacher_<?php echo $override_id; ?>"
+                              name="new_teacher"
+                              value="<?php echo h($loc_row['proctor'] ?? ''); ?>" />
+                          </div>
                         <?php endif; ?>
 
                         <button type="submit" class="btn btn-small btn-primary">Save</button>
