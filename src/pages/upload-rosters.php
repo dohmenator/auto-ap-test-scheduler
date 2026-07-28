@@ -424,7 +424,7 @@ $total_students = array_sum(array_column($summary, 'total_students'));
   <footer>
     <p>Viera High School &copy; <?php echo date('Y'); ?> — AP Testing Coordinator Portal</p>
   </footer>
-
+  <?php include __DIR__ . '/../spinner.php'; ?>
 </body>
 
 </html>

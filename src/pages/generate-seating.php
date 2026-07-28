@@ -174,7 +174,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $stmt->execute();
         $seat++;
       }
-       $charts_generated++;
+      $charts_generated++;
     }
 
     $success_message = "Seating charts generated for $charts_generated AP test(s)!";
@@ -529,7 +529,7 @@ $charts_ready = !empty($tests_summary) &&
   <footer>
     <p>Viera High School &copy; <?php echo date('Y'); ?> — AP Testing Coordinator Portal</p>
   </footer>
-
+  <?php include __DIR__ . '/../spinner.php'; ?>
 </body>
 
 </html>

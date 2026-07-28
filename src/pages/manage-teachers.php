@@ -463,7 +463,7 @@ $tests = $tests_result->fetch_all(MYSQLI_ASSOC);
       editForm.style.display = editForm.style.display === 'none' ? 'block' : 'none';
     }
   </script>
-
+  <?php include __DIR__ . '/../spinner.php'; ?>
 </body>
 
 </html>

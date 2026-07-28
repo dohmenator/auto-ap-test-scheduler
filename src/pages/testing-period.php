@@ -421,7 +421,7 @@ $tests = $tests_result->fetch_all(MYSQLI_ASSOC);
       });
     });
   </script>
-
+  <?php include __DIR__ . '/../spinner.php'; ?>
 </body>
 
 </html>
