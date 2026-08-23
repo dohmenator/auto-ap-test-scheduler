@@ -299,8 +299,8 @@ $schedule_view = [];
 foreach ($all_tests_result as $test) {
     $test_name = $test['test_name'];
     $main_students = (int)$test['main_students'];
-    $overflow_count = max(0, $main_students - 175);
-    $main_count = min($main_students, 175);
+    $overflow_count = max(0, $main_students - 200);
+    $main_count = min($main_students, 200);
 
     $stmt = $conn->prepare("
     SELECT teacher_name, location

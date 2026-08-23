@@ -118,8 +118,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
       $period_start = $period['period_start'];
       $period_end = $period['period_end'];
       $testing_dates = getTestingDates($period_start, $period_end);
-      $first_4_days = array_slice($testing_dates, 0, 4);
-      $last_4_days = array_slice($testing_dates, -4, 4);
 
       // Line 121 - ap_tests query (no user input - safe as is)
       $tests_result = $conn->query("
@@ -130,6 +128,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         CASE test_time WHEN '8AM' THEN 1 WHEN '12PM' THEN 2 END ASC
     ");
       $tests = $tests_result->fetch_all(MYSQLI_ASSOC);
+
 
       // Line 130 - teachers query (no user input - safe as is)
       $teachers_result = $conn->query("
@@ -172,18 +171,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
       // ----------------------------------------
       // Track rooms used per date+time slot
       // ----------------------------------------
-      $slot_rooms_used = []; // ['2027-05-07_12PM' => ['Gym', 'Media Center']]
+      $slot_rooms_used = [];
 
       // ----------------------------------------
-      // PASS 1: Fill first 4 days with
-      // last 4 days teachers ONLY
+      // SINGLE PASS: Assign proctors using
+      // 4-day buffer rule
+      // Teacher eligible if test_date >=
+      // their_test_date minus 4 days
+      // Cannot proctor own subject
+      // One assignment per teacher per day
       // ----------------------------------------
       foreach ($tests as $test) {
         $test_name = $test['test_name'];
         $test_date = $test['test_date'];
         $test_time = $test['test_time'];
-
-        if (!in_array($test_date, $first_4_days)) continue;
 
         $slot_key = $test_date . '_' . $test_time;
         if (!isset($slot_rooms_used[$slot_key])) {
@@ -199,24 +200,60 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
           $slot_rooms_used[$slot_key],
           $conn
         );
-
-        // Track this room as used for this slot
         $slot_rooms_used[$slot_key][] = $resolved_room;
 
         $student_count = $student_counts[$test_name] ?? 0;
         $proctors_needed = $student_count > 100 ? 2 : 1;
-        // $proctors_needed = 2; // Temporarily set to 2 for testing purposes, adjust as needed
         $assigned_count = 0;
+
+        // Check how many already assigned for this session
+        $already_assigned = count(array_filter(
+          $assignments,
+          function ($a) use ($test_name, $test_date) {
+            return $a['test_name'] === $test_name &&
+              $a['test_date'] === $test_date;
+          }
+        ));
+
+        if ($already_assigned >= $proctors_needed) continue;
+        $assigned_count = $already_assigned;
 
         $eligible_teachers = [];
 
         foreach ($teachers as $teacher) {
           $teacher_name = $teacher['teacher_name'];
-          $is_last_4_days = $teacher['is_last_3_days'];
+          $their_test_date = $teacher['their_test_date'];
 
-          if (!$is_last_4_days) continue;
-          if ($teacher['test_name'] === $test_name) continue;
+          // Rule 1: Cannot proctor any subject they teach
+          $teacher_subjects = array_filter(
+            $teachers,
+            fn($t) => $t['teacher_name'] === $teacher_name
+          );
+          $teacher_test_names = array_column(
+            array_values($teacher_subjects),
+            'test_name'
+          );
+          if (in_array($test_name, $teacher_test_names)) continue;
+
+          // Rule 2: One assignment per teacher per day
           if (in_array($test_date, $teacher_assigned_dates[$teacher_name])) continue;
+
+          // Rule 2b: Teacher cannot be assigned to same test twice
+          $already_in_session = array_filter(
+            $assignments,
+            function ($a) use ($teacher_name, $test_name, $test_date) {
+              return $a['teacher_name'] === $teacher_name &&
+                $a['test_name'] === $test_name &&
+                $a['test_date'] === $test_date;
+            }
+          );
+          if (!empty($already_in_session)) continue;
+
+          // Rule 3: 4-day buffer — teacher eligible if
+          // test_date >= their_test_date - 4 days
+          $buffer_date = subtractSchoolDays($their_test_date, 4);
+
+          if ($test_date < $buffer_date) continue;
 
           $eligible_teachers[] = [
             'teacher' => $teacher,
@@ -224,6 +261,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
           ];
         }
 
+        // Sort by assignment count (fewest first)
         usort($eligible_teachers, function ($a, $b) {
           return $a['assignment_count'] - $b['assignment_count'];
         });
@@ -233,13 +271,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
           $teacher = $eligible['teacher'];
           $teacher_name = $teacher['teacher_name'];
+          $day_number = !empty($test['testing_day_number'])
+            ? (int)$test['testing_day_number'] : null;
 
           $stmt = $conn->prepare("
-    INSERT INTO proctor_assignments
-        (teacher_name, test_name, test_date, testing_day_number, 
-         location, school_year)
-    VALUES (?, ?, ?, ?, ?, ?)
-");
+            INSERT INTO proctor_assignments
+                (teacher_name, test_name, test_date, testing_day_number,
+                 location, school_year)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ");
           $stmt->bind_param(
             "sssiss",
             $teacher_name,
@@ -274,252 +314,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
           ];
         }
       }
-      //end passs 1
+      // end single pass
 
-      // ----------------------------------------
-      // PASS 2: Fill ALL remaining sessions
-      // with any eligible teacher
-      // ----------------------------------------
-      foreach ($tests as $test) {
-        $test_name = $test['test_name'];
-        $test_date = $test['test_date'];
-        $test_time = $test['test_time'];
-        $student_count = $student_counts[$test_name] ?? 0;
-        $proctors_needed = $student_count > 100 ? 2 : 1;
-        // $proctors_needed = 2; // Temporarily set to 2 for testing purposes, adjust as needed
-
-        $already_assigned = count(array_filter(
-          $assignments,
-          function ($a) use ($test_name, $test_date) {
-            return $a['test_name'] === $test_name &&
-              $a['test_date'] === $test_date;
-          }
-        ));
-
-        if ($already_assigned >= $proctors_needed) continue;
-
-        $slot_key = $test_date . '_' . $test_time;
-        if (!isset($slot_rooms_used[$slot_key])) {
-          $slot_rooms_used[$slot_key] = [];
-        }
-
-        // Resolve room — only if not already resolved in Pass 1
-        $already_resolved = false;
-        $resolved_room = ''; // initialize to prevent undefined variable
-        foreach ($assignments as $a) {
-          if ($a['test_name'] === $test_name && $a['test_date'] === $test_date) {
-            $resolved_room = $a['location'];
-            $already_resolved = true;
-            break;
-          }
-        }
-
-        if (!$already_resolved) {
-          $resolved_room = resolveSessionRoom(
-            $test_name,
-            $test_date,
-            $test_time,
-            $test['main_location'],
-            $slot_rooms_used[$slot_key],
-            $conn
-          );
-          $slot_rooms_used[$slot_key][] = $resolved_room;
-        }
-
-        $assigned_count = $already_assigned;
-        $eligible_teachers = [];
-
-        foreach ($teachers as $teacher) {
-          $teacher_name = $teacher['teacher_name'];
-          $their_test_date = $teacher['their_test_date'];
-          $is_last_4_days = $teacher['is_last_3_days'];
-
-          if ($teacher['test_name'] === $test_name) continue;
-          if (in_array($test_date, $teacher_assigned_dates[$teacher_name])) continue;
-
-          $eligible = false;
-
-          if ($is_last_4_days) {
-            if (in_array($test_date, $first_4_days)) {
-              $eligible = true;
-            }
-          } else {
-            // All others proctor after their own test date
-            // Also exclude same day entirely regardless of time
-            if ($test_date > $their_test_date) {
-              $eligible = true;
-            }
-          }
-
-          if (!$eligible) continue;
-
-          $eligible_teachers[] = [
-            'teacher' => $teacher,
-            'assignment_count' => $teacher_assignment_counts[$teacher_name]
-          ];
-        }
-
-        usort($eligible_teachers, function ($a, $b) {
-          return $a['assignment_count'] - $b['assignment_count'];
-        });
-
-        foreach ($eligible_teachers as $eligible) {
-          if ($assigned_count >= $proctors_needed) break;
-
-          $teacher = $eligible['teacher'];
-          $teacher_name = $teacher['teacher_name'];
-
-          $stmt = $conn->prepare("
-    INSERT INTO proctor_assignments
-        (teacher_name, test_name, test_date, testing_day_number, 
-         location, school_year)
-    VALUES (?, ?, ?, ?, ?, ?)
-");
-          $stmt->bind_param(
-            "sssiss",
-            $teacher_name,
-            $test_name,
-            $test_date,
-            $day_number,
-            $resolved_room,
-            $school_year
-          );
-
-          if ($stmt->execute()) {
-            $assignments[] = [
-              'teacher_name' => $teacher_name,
-              'test_name' => $test_name,
-              'test_date' => $test_date,
-              'test_time' => $test_time,
-              'location' => $resolved_room
-            ];
-            $teacher_assignment_counts[$teacher_name]++;
-            $teacher_assigned_dates[$teacher_name][] = $test_date;
-            $assigned_count++;
-          }
-        }
-
-        $existing_unassigned = array_filter(
-          $unassigned_sessions,
-          function ($s) use ($test_name, $test_date) {
-            return $s['test_name'] === $test_name &&
-              $s['test_date'] === $test_date;
-          }
-        );
-
-        if ($assigned_count < $proctors_needed && empty($existing_unassigned)) {
-          $unassigned_sessions[] = [
-            'test_name' => $test_name,
-            'test_date' => $test_date,
-            'test_time' => $test_time,
-            'needed' => $proctors_needed,
-            'assigned' => $assigned_count
-          ];
-        }
-      }
-      //end pass 2
-
-      // ----------------------------------------
-      // PASS 3: Last resort for unassigned
-      // last-4-days teachers
-      // ----------------------------------------
-      foreach ($teachers as $teacher) {
-        $teacher_name = $teacher['teacher_name'];
-        $is_last_4_days = $teacher['is_last_3_days'];
-        $their_test_date = $teacher['their_test_date'];
-
-        if (!$is_last_4_days) continue;
-        if ($teacher_assignment_counts[$teacher_name] > 0) continue;
-
-        foreach ($tests as $test) {
-          $test_name = $test['test_name'];
-          $test_date = $test['test_date'];
-          $test_time = $test['test_time'];
-          $student_count = $student_counts[$test_name] ?? 0;
-          $proctors_needed = $student_count > 100 ? 2 : 1;
-          // $proctors_needed = 2; // Temporarily set to 2 for testing purposes, adjust as needed
-
-          if ($teacher['test_name'] === $test_name) continue;
-          if ($test_date >= $their_test_date) continue;
-          if (in_array($test_date, $teacher_assigned_dates[$teacher_name])) continue;
-
-          // Check if session needs more proctors
-          $session_assigned = count(array_filter(
-            $assignments,
-            function ($a) use ($test_name, $test_date) {
-              return $a['test_name'] === $test_name &&
-                $a['test_date'] === $test_date;
-            }
-          ));
-
-          if ($session_assigned >= $proctors_needed) continue;
-
-          // Get resolved room for this session
-          $resolved_room = '';
-          foreach ($assignments as $a) {
-            if (
-              $a['test_name'] === $test_name &&
-              $a['test_date'] === $test_date
-            ) {
-              $resolved_room = $a['location'];
-              break;
-            }
-          }
-
-          if (empty($resolved_room)) {
-            $slot_key = $test_date . '_' . $test_time;
-            if (!isset($slot_rooms_used[$slot_key])) {
-              $slot_rooms_used[$slot_key] = [];
-            }
-            $resolved_room = resolveSessionRoom(
-              $test_name,
-              $test_date,
-              $test_time,
-              $test['main_location'],
-              $slot_rooms_used[$slot_key],
-              $conn
-            );
-            $slot_rooms_used[$slot_key][] = $resolved_room;
-          }
-
-          $stmt = $conn->prepare("
-    INSERT INTO proctor_assignments
-        (teacher_name, test_name, test_date, testing_day_number, 
-         location, school_year)
-    VALUES (?, ?, ?, ?, ?, ?)
-");
-          $stmt->bind_param(
-            "sssiss",
-            $teacher_name,
-            $test_name,
-            $test_date,
-            $day_number,
-            $resolved_room,
-            $school_year
-          );
-
-          if ($stmt->execute()) {
-            $assignments[] = [
-              'teacher_name' => $teacher_name,
-              'test_name' => $test_name,
-              'test_date' => $test_date,
-              'test_time' => $test_time,
-              'location' => $resolved_room
-            ];
-            $teacher_assignment_counts[$teacher_name]++;
-            $teacher_assigned_dates[$teacher_name][] = $test_date;
-            break;
-          }
-        }
-      }
-      //end of pass 3
 
       // ----------------------------------------
       // PASS 4: Auto-assign proctors to
       // accommodations rooms, Guidance,
       // and overflow (Media Center)
-      // Priority: unassigned teachers first,
-      // then teachers with 2 assignments (flagged)
+      // Priority: unassigned teachers first
       // ----------------------------------------
 
       // Build list of sessions needing accommodations proctors
@@ -531,38 +333,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $acc_location = $test['accommodations_location'];
         $overflow_location = $test['overflow_location'] ?? 'Media Center';
 
-        // Check if this test has students in accommodations room
         $stmt = $conn->prepare("
-    SELECT COUNT(*) as cnt FROM students
-    WHERE course_enrolled = ?
-    AND school_year = ?
-    AND accommodation_type IN ('extended_50', 'other')
-");
+        SELECT COUNT(*) as cnt FROM students
+        WHERE course_enrolled = ?
+        AND school_year = ?
+        AND accommodation_type IN ('extended_50', 'other')
+    ");
         $stmt->bind_param("ss", $test_name, $school_year);
         $stmt->execute();
         $acc_count = $stmt->get_result()->fetch_assoc()['cnt'];
 
         $stmt = $conn->prepare("
-    SELECT COUNT(*) as cnt FROM students
-    WHERE course_enrolled = ?
-    AND school_year = ?
-    AND accommodation_type = 'extended_100'
-");
+        SELECT COUNT(*) as cnt FROM students
+        WHERE course_enrolled = ?
+        AND school_year = ?
+        AND accommodation_type = 'extended_100'
+    ");
         $stmt->bind_param("ss", $test_name, $school_year);
         $stmt->execute();
         $guidance_count = $stmt->get_result()->fetch_assoc()['cnt'];
 
         $stmt = $conn->prepare("
-    SELECT COUNT(*) as cnt FROM students
-    WHERE course_enrolled = ?
-    AND school_year = ?
-    AND accommodation_type IN ('none', 'preferential_only')
-");
+        SELECT COUNT(*) as cnt FROM students
+        WHERE course_enrolled = ?
+        AND school_year = ?
+        AND accommodation_type IN ('none', 'preferential_only')
+    ");
         $stmt->bind_param("ss", $test_name, $school_year);
         $stmt->execute();
         $main_count = $stmt->get_result()->fetch_assoc()['cnt'];
-
-        $overflow_count = max(0, $main_count - 175);
+        $overflow_count = max(0, $main_count - 200);
 
         if ($acc_count > 0) {
           $acc_sessions[] = [
@@ -574,15 +374,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
           ];
         }
 
-        if ($guidance_count > 0) {
-          $acc_sessions[] = [
-            'test_name' => $test_name,
-            'test_date' => $test_date,
-            'location' => 'Guidance',
-            'student_count' => $guidance_count,
-            'type' => 'guidance'
-          ];
-        }
+        // if ($guidance_count > 0) {
+        //   $acc_sessions[] = [
+        //     'test_name' => $test_name,
+        //     'test_date' => $test_date,
+        //     'location' => 'Guidance',
+        //     'student_count' => $guidance_count,
+        //     'type' => 'guidance'
+        //   ];
+        // }
 
         if ($overflow_count > 0) {
           $acc_sessions[] = [
@@ -603,82 +403,80 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
         // Check if already has a proctor
         $stmt = $conn->prepare("
-    SELECT id FROM proctor_assignments
-    WHERE test_name = ?
-    AND test_date = ?
-    AND location = ?
-    AND school_year = ?
-    LIMIT 1
-");
+        SELECT id FROM proctor_assignments
+        WHERE test_name = ?
+        AND test_date = ?
+        AND location = ?
+        AND school_year = ?
+        LIMIT 1
+    ");
         $stmt->bind_param("ssss", $test_name, $test_date, $location, $school_year);
         $stmt->execute();
-        $existing = $stmt->get_result()->fetch_assoc();
+        if ($stmt->get_result()->num_rows > 0) continue;
 
-        if ($existing) continue;
+        // Find an eligible unassigned teacher
+        // Try 0-assignment teachers first, then 1-assignment teachers
+        foreach ([0, 1] as $max_assignments) {
+          foreach ($teachers as $teacher) {
+            $teacher_name = $teacher['teacher_name'];
+            $their_test_date = $teacher['their_test_date'];
 
-        // Find an unassigned teacher eligible for this slot
-        $assigned = false;
-        foreach ($teachers as $teacher) {
-          $teacher_name = $teacher['teacher_name'];
-          $their_test_date = $teacher['their_test_date'];
-          $is_last_4_days = $teacher['is_last_3_days'];
+            // Only consider teachers at this assignment level
+            if ($teacher_assignment_counts[$teacher_name] !== $max_assignments) continue;
 
-          // Must have 0 assignments
-          if ($teacher_assignment_counts[$teacher_name] > 0) continue;
+            // Cannot proctor own subject (check all subjects they teach)
+            $teacher_subjects = array_filter(
+              $teachers,
+              fn($t) => $t['teacher_name'] === $teacher_name
+            );
+            $teacher_test_names = array_column(
+              array_values($teacher_subjects),
+              'test_name'
+            );
+            if (in_array($test_name, $teacher_test_names)) continue;
 
-          // Cannot proctor own subject
-          if ($teacher['test_name'] === $test_name) continue;
+            // Cannot be assigned same day
+            if (in_array($test_date, $teacher_assigned_dates[$teacher_name])) continue;
 
-          // Cannot be assigned same day
-          if (in_array($test_date, $teacher_assigned_dates[$teacher_name])) continue;
+            // Check school day buffer
+            $buffer_date = subtractSchoolDays($their_test_date, 4);
+            if ($test_date < $buffer_date) continue;
 
-          // Check timing eligibility
-          $eligible = false;
-          if ($is_last_4_days) {
-            if (in_array($test_date, $first_4_days)) {
-              $eligible = true;
+            // Assign this teacher
+            $day_number = null;
+            foreach ($tests as $t) {
+              if ($t['test_name'] === $test_name) {
+                $day_number = !empty($t['testing_day_number'])
+                  ? (int)$t['testing_day_number'] : null;
+                break;
+              }
             }
-          } else {
-            if ($test_date > $their_test_date) {
-              $eligible = true;
+
+            $stmt = $conn->prepare("
+            INSERT INTO proctor_assignments
+                (teacher_name, test_name, test_date, testing_day_number,
+                 location, school_year)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ");
+            $stmt->bind_param(
+              "sssiss",
+              $teacher_name,
+              $test_name,
+              $test_date,
+              $day_number,
+              $location,
+              $school_year
+            );
+
+            if ($stmt->execute()) {
+              $teacher_assignment_counts[$teacher_name]++;
+              $teacher_assigned_dates[$teacher_name][] = $test_date;
+              break 2; // Break out of both foreach loops
             }
-          }
-
-          if (!$eligible) continue;
-
-          // Assign this teacher
-          $day_number = null;
-          foreach ($tests as $t) {
-            if ($t['test_name'] === $test_name) {
-              $day_number = $t['testing_day_number'];
-              break;
-            }
-          }
-
-          $stmt = $conn->prepare("
-    INSERT INTO proctor_assignments
-        (teacher_name, test_name, test_date, testing_day_number,
-         location, school_year)
-    VALUES (?, ?, ?, ?, ?, ?)
-");
-          $stmt->bind_param(
-            "sssiss",
-            $teacher_name,
-            $test_name,
-            $test_date,
-            $day_number,
-            $location,
-            $school_year
-          );
-
-          if ($stmt->execute()) {
-            $teacher_assignment_counts[$teacher_name]++;
-            $teacher_assigned_dates[$teacher_name][] = $test_date;
-            $assigned = true;
-            break;
           }
         }
-      } //end pass 4
+      }
+      // end pass 4
 
 
       // Flag teachers with zero assignments
@@ -969,8 +767,8 @@ $schedule_by_date = [];
 foreach ($all_tests_result as $test) {
 
   $main_students = (int)$test['main_students'];
-  $overflow_count = max(0, $main_students - 175);
-  $main_count = min($main_students, 175);
+  $overflow_count = max(0, $main_students - 200);
+  $main_count = min($main_students, 200);
 
   // Fetch all proctor assignments for this test
   $test_name = $test['test_name'];
@@ -1162,7 +960,7 @@ $stmt = $conn->prepare("
         GREATEST(0, (SELECT COUNT(*) FROM students s 
          WHERE s.course_enrolled = t.test_name 
          AND s.school_year = ?
-         AND s.accommodation_type IN ('none','preferential_only')) - 175) as overflow_count,
+         AND s.accommodation_type IN ('none','preferential_only')) - 200) as overflow_count,
         (SELECT GROUP_CONCAT(p.teacher_name SEPARATOR ', ')
          FROM proctor_assignments p
          WHERE p.test_name = t.test_name
@@ -1211,6 +1009,27 @@ $stmt = $conn->prepare("
 $stmt->bind_param("s", $school_year);
 $stmt->execute();
 $acc_teachers = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+
+
+// ------------------------------------------------
+// Helper: Subtract N school days from a date
+// skipping weekends
+// ------------------------------------------------
+function subtractSchoolDays($date, $days)
+{
+  $current = strtotime($date);
+  $subtracted = 0;
+  while ($subtracted < $days) {
+    $current = strtotime('-1 day', $current);
+    $day_of_week = date('N', $current);
+    // Skip Saturday (6) and Sunday (7)
+    if ($day_of_week < 6) {
+      $subtracted++;
+    }
+  }
+  return date('Y-m-d', $current);
+}
+
 
 ?>
 <!DOCTYPE html>

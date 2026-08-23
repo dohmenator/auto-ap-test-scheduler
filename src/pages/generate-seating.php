@@ -104,8 +104,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
       $main_students = array_merge($pref_students, $none_students);
       $overflow_students = [];
 
-      // Check if main location exceeds 175
-      $capacity = 175;
+      // Check if main location exceeds 200
+      $capacity = 200;
       if (count($main_students) > $capacity) {
         $overflow_students = array_slice($main_students, $capacity);
         $main_students = array_slice($main_students, 0, $capacity);
@@ -470,7 +470,7 @@ $charts_ready = !empty($tests_summary) &&
               <?php foreach ($tests_summary as $test): ?>
                 <?php
                 $total_main = $test['no_acc'] + $test['pref'];
-                $needs_overflow = $total_main > 175;
+                $needs_overflow = $total_main > 200;
                 ?>
                 <tr>
                   <td><strong><?php echo h($test['course_enrolled']); ?></strong></td>
@@ -497,7 +497,7 @@ $charts_ready = !empty($tests_summary) &&
                   <td><?php echo $test['guidance']; ?></td>
                   <td>
                     <?php if ($needs_overflow): ?>
-                      <span class="badge badge-gold">⚠️ Yes (<?php echo $total_main - 175; ?> overflow)</span>
+                      <span class="badge badge-gold">⚠️ Yes (<?php echo $total_main - 200; ?> overflow)</span>
                     <?php else: ?>
                       <span class="badge badge-gray">No</span>
                     <?php endif; ?>

@@ -184,6 +184,8 @@ VALUES
     ('AP Environmental Science', 'Gym', '4-112'),
     ('AP Computer Science A', 'Gym', 'Guidance'),
     ('AP Cybersecurity', 'Gym', 'Guidance'),
+    ('AP Comparative Government and Politics', 'Gym', '4-115', 'Media Center'),
+    ('AP Chemistry', 'Gym', '2-108G', 'Media Center'),
     ('AP Networking', 'Gym', 'Guidance');
 
 -- ------------------------------------------------
